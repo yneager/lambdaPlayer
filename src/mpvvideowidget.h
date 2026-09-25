@@ -3,8 +3,13 @@
 #include <QOpenGLWidget>
 #include <QString>
 #include <mpv/client.h>
+#include <atomic>
 
 struct mpv_render_context;
+
+namespace frc {
+class ScreenInterpolationController;
+}
 
 // Video surface for libmpv's official render API (vo=libmpv, OpenGL).
 //
@@ -28,6 +33,10 @@ public:
 
     bool isRenderReady() const { return renderContext_ != nullptr; }
 
+    // Post-render AMD FRC: while it is enabled, every new mpv frame is
+    // rendered into its input texture and it decides what to draw.
+    void setFrameInterpolation(frc::ScreenInterpolationController *controller);
+
     // Frees the mpv render context. Must run before mpv_terminate_destroy().
     void shutdown();
 
@@ -44,7 +53,11 @@ private:
     static void *getProcAddress(void *ctx, const char *name);
     Q_INVOKABLE void requestFrame();
     void releaseRenderContext();
+    void renderMpv(int fbo, int width, int height);
+    QSize physicalSize() const;
 
     mpv_handle *mpv_ = nullptr;
     mpv_render_context *renderContext_ = nullptr;
+    std::atomic_bool frameRequestPending_{false};
+    frc::ScreenInterpolationController *frc_ = nullptr;
 };

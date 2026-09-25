@@ -65,7 +65,7 @@ main.view[hidden]{display:none!important}
 .meta-info{position:absolute;left:12px;right:12px;bottom:11px;z-index:2}
 .meta-info strong{display:block;font-size:12px;letter-spacing:-.01em;line-height:1.25;max-height:2.5em;overflow:hidden}
 .meta-info small{display:block;margin-top:4px;color:rgba(255,255,255,.45);font-size:8px}
-.meta-rating{position:absolute;z-index:2;right:9px;top:9px;padding:3px 6px;border-radius:7px;background:rgba(5,7,10,.62);border:1px solid rgba(255,255,255,.12);color:var(--cyan2);font-size:8px;font-weight:700;backdrop-filter:blur(10px)}
+.meta-rating{position:absolute;z-index:2;right:9px;top:9px;padding:3px 6px;border-radius:7px;background:rgba(5,7,10,.86);border:1px solid rgba(255,255,255,.12);color:var(--cyan2);font-size:8px;font-weight:700}
 .meta-card.skeleton{cursor:default;pointer-events:none}
 .meta-card.skeleton .meta-art{background:linear-gradient(100deg,rgba(255,255,255,.03) 20%,rgba(255,255,255,.07) 40%,rgba(255,255,255,.03) 60%);background-size:300% 100%;animation:shimmer 1.6s linear infinite}
 @keyframes shimmer{to{background-position:-150% 0}}

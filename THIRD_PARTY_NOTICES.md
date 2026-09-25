@@ -68,3 +68,16 @@ code from it was copied into LAMBDA Player.
 |-----------|------------------|---------|------------------|
 | stremio-native/stream-server | commit `f585ab6` (pinned in `tools/stream-server/versions.json`), built from source with LAMBDA's host and patches in `tools/stream-server/` | MIT | `lambda-stream-server.exe`, `licenses/stream-server-LICENSE.txt` |
 | libtorrent-rasterbar, OpenSSL, Boost, UnRAR source, 7-Zip/LZMA SDK and Rust crates (statically linked into the engine) | as resolved by the pinned vcpkg commit and upstream `Cargo.lock` | BSD-3-Clause and others / Apache-2.0 / BSL-1.0 / UnRAR license / LGPL-2.1 | see `licenses/THIRD-PARTY.txt` |
+
+## AMD FRC frame generation (post-render interpolation)
+
+| Component | Version / commit | License | Where |
+|-----------|------------------|---------|-------|
+| AMD Advanced Media Framework SDK (headers `amf/public/include/**`, `amf/public/common/{AMFFactory,AMFSTL,Thread,TraceAdapter}.*`, `Windows/ThreadWindows.cpp`) | GPUOpen-LibrariesAndSDKs/AMF `6277e353fd625121a8f627b1d0540323ef372a49` | MIT, © Advanced Micro Devices, Inc. | copied unmodified to `third_party/amf/`, compiled into `LambdaPlayer.exe`; license `licenses/AMF-LICENSE.txt` |
+| AMD SimpleFRC sample (`amf/public/samples/CPPSamples/SimpleFRC/SimpleFRC.cpp`) | same commit | MIT, © 2024 Advanced Micro Devices, Inc. | FRC setup and the SubmitInput/QueryOutput/resubmit loop adapted in `src/frc/amffrcinterpolator.cpp` and `tools/frc-proof/frcproof.cpp` |
+
+The AMF runtime itself (`amfrt64.dll`) is part of the AMD graphics driver and is
+not redistributed; on other GPUs the option is shown as unavailable. The
+Windows.Graphics.Capture samples (robmikh/Win32CaptureSample,
+microsoft/Windows.UI.Composition-Win32-Samples, both MIT) were studied but no
+code from them is used; see `docs/frc/RESEARCH.md`.

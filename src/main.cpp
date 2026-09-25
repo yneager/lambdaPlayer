@@ -2,6 +2,7 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QStyleFactory>
+#include <QSurfaceFormat>
 
 #include <clocale>
 
@@ -14,6 +15,19 @@ int main(int argc, char *argv[])
     // share contexts. Both calls must happen before QApplication exists.
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+    // Don't block the GUI thread in SwapBuffers: with the default interval 1
+    // every repaint of the window waited ~31 ms during video playback
+    // (measured GUI event latency 32 ms p50; 0.06 ms with interval 0). The
+    // window is composited by DWM, which still paces presentation. This also
+    // lets the AMD FRC presenter show frames on time.
+    // LAMBDA_SWAP_INTERVAL=1 restores the previous behaviour.
+    {
+        QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+        format.setSwapInterval(qEnvironmentVariableIsSet("LAMBDA_SWAP_INTERVAL")
+                                   ? qEnvironmentVariableIntValue("LAMBDA_SWAP_INTERVAL")
+                                   : 0);
+        QSurfaceFormat::setDefaultFormat(format);
+    }
 
     // Smooth scrolling: on the desktop-OpenGL path above, Chromium leaves GPU
     // rasterization off, so every newly revealed tile of the Vui pages (large

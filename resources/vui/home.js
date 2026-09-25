@@ -106,6 +106,10 @@
 
   // ---- Bindings -------------------------------------------------------------
   function bind() {
+    const hero = q('.hero');
+    if (hero) new IntersectionObserver(entries => {
+      hero.classList.toggle('is-offscreen', !entries[0].isIntersecting);
+    }).observe(hero);
     qa('[data-action]').forEach(el => el.addEventListener('click', e => {
       e.preventDefault();
       const action = el.dataset.action;
@@ -117,7 +121,12 @@
     }));
 
     // Nav shell gets a stronger glass once the page scrolls.
-    const updateNav = () => q('.nav-shell').classList.toggle('scrolled', window.scrollY > 24);
+    const nav = q('.nav-shell');
+    let navScrolled;
+    const updateNav = () => {
+      const scrolled = window.scrollY > 24;
+      if (navScrolled !== scrolled) { nav.classList.toggle('scrolled', scrolled); navScrolled = scrolled; }
+    };
     window.addEventListener('scroll', updateNav, {passive: true});
     updateNav();
 
@@ -167,10 +176,14 @@
       if (Math.abs(window.scrollY - current) > 2) { frame = 0; return; }
       const dt = Math.min(64, now - (last || now - 16.7));
       last = now;
+      target = Math.max(0, Math.min(root.scrollHeight - window.innerHeight, target));
       current += (target - current) * (1 - Math.pow(0.82, dt / 16.7));
       if (Math.abs(target - current) < 0.5) current = target;
       window.scrollTo({top: current, behavior: 'instant'});
-      frame = current === target ? 0 : requestAnimationFrame(step);
+      // Chromium rounds/clamps scroll positions; use the actual position so
+      // rounding at the bottom cannot leave a permanent animation running.
+      current = window.scrollY;
+      frame = Math.abs(current - target) < 1 ? 0 : requestAnimationFrame(step);
     };
 
     window.addEventListener('wheel', e => {

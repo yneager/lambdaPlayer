@@ -164,6 +164,7 @@ PlayerChrome::PlayerChrome(QWidget *parent)
 
     connect(bridge, &LambdaBridge::readyRequested, this, [this] {
         ready_ = true;
+        lastState_.clear();
         pushState();
         pushSettings();
         emit ready();
@@ -175,6 +176,8 @@ PlayerChrome::PlayerChrome(QWidget *parent)
         else if (action == "next") emit nextRequested();
         else if (action == "mute") emit muteRequested();
         else if (action == "fullscreen") emit fullscreenRequested();
+        else if (action == "fill-video") emit fullscreenFillRequested(true);
+        else if (action == "fit-video") emit fullscreenFillRequested(false);
         else if (action == "activity") emit activityRequested();
         else if (action == "load-subtitle") emit loadSubtitleRequested();
         else if (action == "mini") emit miniRequested();
@@ -208,6 +211,7 @@ void PlayerChrome::setChromeVisible(bool visible) { if (chromeVisible_ == visibl
 void PlayerChrome::setLoading(bool loading) { loading_ = loading; pushState(); }
 void PlayerChrome::setFinished(bool finished) { if (finished_ == finished) return; finished_ = finished; pushState(); }
 void PlayerChrome::setHasNext(bool hasNext) { if (hasNext_ == hasNext) return; hasNext_ = hasNext; pushState(); }
+void PlayerChrome::setFullscreenFill(bool fill) { fullscreenFill_ = fill; pushState(); }
 void PlayerChrome::setBuffered(double seconds) { buffered_ = seconds; }
 
 void PlayerChrome::runScript(const QString &script)
@@ -252,6 +256,11 @@ void PlayerChrome::setActive(bool active)
         view_->page()->setLifecycleState(active
             ? QWebEnginePage::LifecycleState::Active
             : QWebEnginePage::LifecycleState::Frozen);
+        if (active) {
+            lastState_.clear();
+            pushState();
+            pushSettings();
+        }
     }
 }
 
@@ -275,12 +284,23 @@ void PlayerChrome::hideEvent(QHideEvent *event)
 
 void PlayerChrome::pushState()
 {
+    if (statePending_) return;
+    statePending_ = true;
+    QMetaObject::invokeMethod(this, [this] {
+        statePending_ = false;
+        flushState();
+    }, Qt::QueuedConnection);
+}
+
+void PlayerChrome::flushState()
+{
     if (!ready_ || !view_) return;
     QJsonObject state;
     state.insert("loaded", loaded_);
     state.insert("loading", loading_);
     state.insert("finished", finished_);
     state.insert("hasNext", hasNext_);
+    state.insert("fullscreenFill", fullscreenFill_);
     state.insert("buffered", buffered_);
     state.insert("paused", paused_);
     state.insert("muted", muted_);
@@ -295,7 +315,10 @@ void PlayerChrome::pushState()
     state.insert("qualitySecondary", qualitySecondary_);
     state.insert("chapterIndex", chapterIndex_);
     state.insert("chapterTitle", chapterTitle_);
-    const QString json = QString::fromUtf8(QJsonDocument(state).toJson(QJsonDocument::Compact));
+    const QByteArray encoded = QJsonDocument(state).toJson(QJsonDocument::Compact);
+    if (encoded == lastState_) return;
+    lastState_ = encoded;
+    const QString json = QString::fromUtf8(encoded);
     view_->page()->runJavaScript(QString("window.lambdaUi&&window.lambdaUi.setState(%1);").arg(json));
 }
 

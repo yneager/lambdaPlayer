@@ -2,6 +2,26 @@
 
 This file records notable completed work visible in the repository history.
 
+## Unreleased — AMD FRC post-render frame generation
+
+- AMD FRC now also runs at 60, 120 and 200 fps: FRC only doubles, so 2-4 components are cascaded (up to a 384 fps frame grid for 24 fps video) and a presenter picks, per output tick, the frame whose content time fits best (phase-locked to the video). Measured at native 3840x2160: 60.0 / 119.8 / 201.0 presented frames/s (GPU 3D load 50 / 74 / 75 %); audio delay follows the measured 115-130 ms latency.
+- Player controls: separate Speed, Audio, Subtitles and Smoothness buttons replace the Settings button; Fit/Fill for fullscreen moved to the "..." button.
+- Fullscreen: no Windows 11 rounded corners or 1 px window border (DWM corner preference / border colour switched while fullscreen, restored afterwards).
+
+- New interpolation mode "Double frame rate (AMD FRC)": mpv renders each new frame into a D3D11 texture (WGL_NV_DX_interop2), AMD AMF Frame Rate Conversion (FRC_x2_PRESENT, SUPER profile, native motion search, indicator off) generates the intermediate frame on a worker thread, and the video widget presents source + generated frames at 2x the source rate under the unchanged player chrome. No window capture, no CPU copies, no VapourSynth. RIFE stays as the legacy mode. Details and upstream sources: `docs/frc/RESEARCH.md`.
+- Measured on RX 9070 XT: 24 fps 4K source -> 48.0 presented frames/s with FRC input 3840x2160 (`LAMBDA_FRC_INPUT=source`) and at 2560x1440 / 1360x840 on-screen input; 0 late, 2 ms worker time; audio delayed by the measured 66 ms lag and restored when turned off; flushed on seek, pause/resume and file change.
+- Fixed a pre-existing stall: the window's vsync-blocking SwapBuffers held the GUI thread ~31 ms per repaint during playback (32 ms event latency). Swap interval 0 (DWM paces composition); `LAMBDA_SWAP_INTERVAL=1` restores the old behaviour.
+- AMF SDK subset vendored in `third_party/amf` (MIT); standalone proof in `tools/frc-proof`.
+
+## Unreleased — window, scrolling and playback performance
+
+- Fill the native rounded window instead of drawing a rounded card inside a square backing; remove the oversized masking shadow.
+- Size fullscreen video directly, ignore delayed windowed geometry, and refresh browser geometry on window-state changes.
+- Reduce Home scroll repaint costs, pause offscreen hero animations, and clamp animated wheel scrolling when content height changes.
+- Coalesce mpv render notifications and player UI updates; avoid target-time waits on Qt's UI thread and repeated whole-player DOM updates for the timeline.
+- Bound RIFE CPU/frame concurrency, preserve per-frame colour metadata and R80 colour range, and prevent interpolation activation before a video is ready.
+- Release build, eight protocol suites, local HTTP/fullscreen/seek/RIFE runtime checks and concurrent colour/timing regression checks passed. See HANDOFF.md for measurements and test limits.
+
 ## Version Map
 
 - **v0.2.5** — Stremio add-on client: install/configure/import add-ons, Home/Discover/Search/Details from add-on catalogs and metadata, source picker, add-on streams in the libmpv player, subtitle add-ons in the subtitle menu, built-in torrent/archive streaming engine.

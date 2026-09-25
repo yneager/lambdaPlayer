@@ -18,6 +18,7 @@
   const root = document.documentElement;
   let bridge = null;
   let pending = false;
+  let lastRegions = '';
 
   const HOLE_SELECTOR = [
     '[data-drag] button', '[data-drag] a', '[data-drag] [data-nodrag]', '[data-drag] input',
@@ -73,7 +74,11 @@
     const dragSelector = root.classList.contains('is-mini') ? '[data-drag], [data-drag-mini]' : '[data-drag]';
     document.querySelectorAll(dragSelector).forEach(el => { const r = visibleRect(el); if (r) drags.push(r); });
     document.querySelectorAll(HOLE_SELECTOR).forEach(el => { const r = visibleRect(el); if (r) holes.push(r); });
-    bridge.setDragRegions(drags, holes);
+    const regions = JSON.stringify([drags, holes]);
+    if (regions !== lastRegions) {
+      lastRegions = regions;
+      bridge.setDragRegions(drags, holes);
+    }
   }
 
   function scheduleRegions() {

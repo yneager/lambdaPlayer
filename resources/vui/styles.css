@@ -8,10 +8,12 @@ body{overflow:hidden}
 .player.media-active .poster,
 .player.media-active .ambient,
 .player.media-active .noise,
-.player.media-active .scanline{opacity:0!important;pointer-events:none}
+.player.media-active .scanline{display:none!important;animation:none!important;pointer-events:none}
+/* These pseudo-elements sit above the native video, not inside .poster. */
+.player.media-active::before,.player.media-active::after{display:none!important;animation:none!important;content:none!important}
 .poster,.ambient,.noise,.scanline{transition:opacity .35s var(--ease)}
 .center-state{transition:opacity .25s var(--ease),transform .25s var(--ease)}
-.center-state.lambda-hidden{opacity:0;pointer-events:none;transform:translate(-50%,-43%) scale(.96)}
+.center-state.lambda-hidden{display:none!important;opacity:0;pointer-events:none}
 .player.lambda-chrome-hidden .topbar,
 .player.lambda-chrome-hidden .side-rail,
 .player.lambda-chrome-hidden .control-deck,
@@ -45,17 +47,16 @@ body{overflow:hidden}
 
 /* ==== LAMBDA Player v0.2.2 polish ========================================
    Window-filling responsive layout, native video mask, window states. */
-:root{--shell-pad:clamp(8px,1vw,14px);--player-radius:clamp(18px,2vw,30px)}
+:root{--shell-pad:0px;--player-radius:0px}
 html,body{height:100%}
 body{display:block;min-height:0;overflow:hidden}
-.page-shell{position:relative;width:100vw!important;height:100vh;padding:var(--shell-pad)!important;transition:padding .3s var(--ease)}
+.page-shell{position:relative;width:100vw!important;height:100vh;padding:var(--shell-pad)!important}
 .drag-strip{position:absolute;left:0;right:0;top:0;height:max(var(--shell-pad),6px)}
-/* The card fills the window. The last, huge spread shadow paints the page
-   background everywhere outside the rounded card, which masks the square
-   corners of the OpenGL video surface underneath with anti-aliased edges. */
-.player{width:100%;height:100%;min-height:0!important;aspect-ratio:auto!important;border-radius:var(--player-radius)!important;border:1px solid rgba(255,255,255,.11)!important;box-shadow:0 24px 70px rgba(0,0,0,.45),inset 0 1px rgba(255,255,255,.08),0 0 0 200vmax var(--bg)!important;transition:border-radius .3s var(--ease),border-color .3s var(--ease)}
+/* Fill the native window; DWM rounds the actual outer edge. An inset card
+   and a 200vmax masking shadow left a rounded UI inside a square backing. */
+.player{width:100%;height:100%;min-height:0!important;aspect-ratio:auto!important;border-radius:var(--player-radius)!important;border:0!important;box-shadow:none!important}
 .player.media-active{border-color:rgba(255,255,255,.08)!important}
-html.is-maximized{--shell-pad:clamp(6px,.7vw,10px)}
+html.is-maximized{--shell-pad:0px}
 html.is-fullscreen,html.is-mini{--shell-pad:0px}
 html.is-fullscreen .player,html.is-mini .player{border-radius:0!important;border:0!important;box-shadow:none!important}
 html.is-fullscreen .corner-mark,html.is-mini .corner-mark,html.is-fullscreen .drag-strip{display:none}
@@ -136,3 +137,8 @@ html.is-mini .player:not(:hover) .control-deck{transform:translateY(8px)}
    underneath, so raise opacity for legibility over bright frames. */
 .player.media-active .glass-panel{background:linear-gradient(180deg,rgba(20,23,32,.84),rgba(10,12,18,.78));border-color:rgba(255,255,255,.1)}
 .player.media-active .quality-badge{background:rgba(12,14,20,.8)}
+/* One control per panel: Audio, Subtitles, Smoothness, Speed, Fullscreen picture */
+.lambda-settings[data-focus="interpolation"] .lambda-group:not([data-group="interpolation"]),
+.lambda-settings[data-focus="picture"] .lambda-group:not([data-group="picture"]){display:none}
+.icon-button.interp-on{color:var(--cyan-2)}
+.lambda-settings[data-focus] .lambda-group>h4{display:none}

@@ -5,6 +5,7 @@
 #include "homepage.h"
 #include "playerchrome.h"
 #include "interpolationcontroller.h"
+#include "frc/screeninterpolationcontroller.h"
 #include "mpvvideowidget.h"
 #include "windowbridge.h"
 
@@ -35,6 +36,7 @@
 #include <QCollator>
 #include <QDesktopServices>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QScreen>
 #include <QSettings>
@@ -42,6 +44,7 @@
 #include <QStandardPaths>
 #include <QWindow>
 #include <QStandardItemModel>
+#include <QOpenGLContext>
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
@@ -61,6 +64,14 @@
 #include <windowsx.h>
 #include <dwmapi.h>
 #endif
+
+// Interpolation menu entries: 0 Original, 1 RIFE double, 2 RIFE 60,
+// 3..6 AMD FRC at 2x / 60 / 120 / 200 fps.
+static constexpr int kFrcModeIndex = 3;
+static constexpr double kFrcTargets[] = {0.0, 60.0, 120.0, 200.0};
+static constexpr int kFrcModeCount = 4;
+static bool isFrcMode(int index) { return index >= kFrcModeIndex && index < kFrcModeIndex + kFrcModeCount; }
+static double frcTargetFor(int index) { return isFrcMode(index) ? kFrcTargets[index - kFrcModeIndex] : 0.0; }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -105,7 +116,35 @@ MainWindow::MainWindow(QWidget *parent)
             for (const QString &request : requests) {
                 const QString name = QFileInfo(request).completeBaseName();
                 QFile::remove(dir.filePath(request));
-                grab().save(dir.filePath(name + ".png"));
+                // Opt-in runtime diagnostics alongside the composited capture.
+                // No URLs, headers or other add-on credentials are recorded.
+                const auto rectJson = [](const QRect &r) {
+                    return QJsonArray{r.x(), r.y(), r.width(), r.height()};
+                };
+                QJsonObject state{{"fullscreen", fullscreenMode_},
+                                  {"window", rectJson(geometry())},
+                                  {"video", rectJson(video_->geometry())},
+                                  {"root", rectJson(root_->rect())},
+                                  {"videoMasked", !video_->mask().isEmpty()}};
+                for (const char *property : {"estimated-vf-fps", "frame-drop-count", "decoder-frame-drop-count",
+                                             "hwdec-current", "avsync", "time-pos", "panscan", "video-params/w",
+                                             "video-params/h", "video-params/pixelformat", "osd-dimensions",
+                                             "audio-delay", "container-fps", "vo-delayed-frame-count"}) {
+                    state.insert(QLatin1String(property), mpvStringProperty(property));
+                }
+#ifdef Q_OS_WIN
+                DWORD corners = 0;
+                if (SUCCEEDED(::DwmGetWindowAttribute(reinterpret_cast<HWND>(winId()), 33, &corners, sizeof(corners)))) {
+                    state.insert("nativeCornerPreference", int(corners));
+                }
+#endif
+
+                if (frc_) state.insert("frc", frc_->stats());
+                QFile diagnostic(dir.filePath(name + ".json"));
+                if (diagnostic.open(QIODevice::WriteOnly)) diagnostic.write(QJsonDocument(state).toJson());
+                // Capturing a large GL framebuffer can stall presentation;
+                // *-stats.request collects timing without disturbing it.
+                if (!name.endsWith("-stats")) grab().save(dir.filePath(name + ".png"));
             }
         });
         grabTimer->start();
@@ -124,6 +163,10 @@ MainWindow::~MainWindow()
             mpv_command(mpv_, writeArgs);
         }
         mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
+        // Restores audio-delay and stops the FRC worker before mpv goes away.
+        if (frc_) {
+            frc_->setEnabled(false);
+        }
         // The render context must be freed before the mpv core.
         if (video_) {
             video_->shutdown();
@@ -192,6 +235,22 @@ void MainWindow::buildUi()
     // chrome above it.
     video_ = new MpvVideoWidget(root_);
     connect(video_, &MpvVideoWidget::renderReady, this, [this] {
+        // Runs inside initializeGL (context current): check the AMD FRC
+        // chain once so the menu only offers what works on this PC.
+        if (frc_ && interpolationMode_) {
+            QString reason;
+            const bool available = frc_->probe(QOpenGLContext::currentContext(), &reason);
+            if (auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model())) {
+                for (int i = kFrcModeIndex; i < kFrcModeIndex + kFrcModeCount; ++i) {
+                    if (QStandardItem *item = model->item(i)) {
+                        item->setEnabled(available);
+                        item->setToolTip(available ? QString("AMD AMF Frame Rate Conversion on %1").arg(frc_->adapterName())
+                                                   : QString("Not available: %1").arg(reason));
+                    }
+                }
+            }
+            updateInterpolationLabels();
+        }
         if (!pendingPath_.isEmpty()) {
             const QString path = pendingPath_;
             pendingPath_.clear();
@@ -432,6 +491,10 @@ void MainWindow::buildUi()
     interpolationMode_->addItem("Original");
     interpolationMode_->addItem("Double frame rate (RIFE)");
     interpolationMode_->addItem("60 fps (RIFE)");
+    interpolationMode_->addItem("Double frame rate (AMD FRC)");
+    interpolationMode_->addItem("60 fps (AMD FRC)");
+    interpolationMode_->addItem("120 fps (AMD FRC)");
+    interpolationMode_->addItem("200 fps (AMD FRC)");
     interpolationMode_->setCurrentIndex(0);
     interpolationMode_->setToolTip("Frame interpolation (RIFE v4.6 via VapourSynth, Vulkan GPU)");
 
@@ -476,6 +539,11 @@ void MainWindow::buildUi()
     connect(playerChrome_, &PlayerChrome::miniRequested, this, &MainWindow::toggleMiniPlayer);
     connect(playerChrome_, &PlayerChrome::muteRequested, this, &MainWindow::toggleMute);
     connect(playerChrome_, &PlayerChrome::fullscreenRequested, this, &MainWindow::toggleFullscreen);
+    connect(playerChrome_, &PlayerChrome::fullscreenFillRequested, this, [this](bool fill) {
+        fullscreenFill_ = fill;
+        command({"set", "panscan", fullscreenMode_ && fill ? "1" : "0"});
+        playerChrome_->setFullscreenFill(fill);
+    });
     connect(playerChrome_, &PlayerChrome::activityRequested, this, [this] {
         if (fullscreenMode_) showFullscreenControls();
     });
@@ -501,6 +569,7 @@ void MainWindow::buildUi()
         }
         if (speed_->currentIndex() == best) {
             setMpvPropertyDouble("speed", speeds[best]);
+            updateInterpolationLabels();
             playerChrome_->setSpeed(speeds[best]);
         } else {
             speed_->setCurrentIndex(best);
@@ -517,9 +586,21 @@ void MainWindow::buildUi()
     });
     connect(playerChrome_, &PlayerChrome::videoRectChanged, this,
             [this](int x, int y, int width, int height, int radius) {
-        Q_UNUSED(radius); // the web chrome paints the rounded mask itself
         if (!video_ || width <= 0 || height <= 0) return;
+        // Browser geometry can arrive late during fullscreen transitions.
+        if (fullscreenMode_) {
+            video_->clearMask();
+            video_->setGeometry(root_->rect());
+            return;
+        }
         video_->setGeometry(x, y, width, height);
+        if (radius > 0) {
+            QPainterPath clip;
+            clip.addRoundedRect(QRectF(video_->rect()), radius, radius);
+            video_->setMask(QRegion(clip.toFillPolygon().toPolygon()));
+        } else {
+            video_->clearMask();
+        }
         playerChrome_->raise();
         updateSubtitleMargin();
     });
@@ -611,6 +692,9 @@ void MainWindow::initMpv()
     // Render through libmpv's render API into MpvVideoWidget (no native wid).
     mpv_set_option_string(mpv_, "vo", "libmpv");
     mpv_set_option_string(mpv_, "hwdec", "auto-safe");
+    // Qt paints on the GUI thread. Let mpv schedule frames at their target
+    // time instead of sleeping inside paintGL (see render.h).
+    mpv_set_option_string(mpv_, "video-timing-offset", "0");
     mpv_set_option_string(mpv_, "keep-open", "yes");
     mpv_set_option_string(mpv_, "osc", "no");
     mpv_set_option_string(mpv_, "input-default-bindings", "no");
@@ -656,8 +740,67 @@ void MainWindow::initMpv()
     mpv_request_log_messages(mpv_, "error");
 
     interpolation_ = new InterpolationController(mpv_, this);
+
+    // Post-render AMD FRC (native resolution, no VapourSynth).
+    frc_ = new frc::ScreenInterpolationController(mpv_, this);
+    video_->setFrameInterpolation(frc_);
+    connect(frc_, &frc::ScreenInterpolationController::failed, this, [this](const QString &reason) {
+        const QSignalBlocker blocker(interpolationMode_);
+        interpolationMode_->setCurrentIndex(0);
+        updateQualityBadge();
+        syncChromeSettings();
+        showInterpolationError(reason + ". Playing at the original frame rate.");
+    });
     connect(interpolation_, &InterpolationController::deactivated,
             this, &MainWindow::interpolationDeactivated);
+
+    // Keep native detail when inference cannot keep up. Detect sustained
+    // presentation loss / A/V drift, not a video's nominal filter FPS.
+    auto *healthTimer = new QTimer(this);
+    healthTimer->setInterval(1000);
+    connect(healthTimer, &QTimer::timeout, this, [this] {
+        auto reset = [this] {
+            interpolationWarmup_.restart();
+            interpolationSample_.restart();
+            interpolationLastDrops_ = -1;
+            interpolationSlowSamples_ = 0;
+        };
+        if (!mediaLoaded_ || paused_ || eofReached_ || !isPlayerVisible()
+            || interpolation_->mode() == InterpolationController::Mode::Off) {
+            reset();
+            return;
+        }
+        int seeking = 0, buffering = 0;
+        mpv_get_property(mpv_, "seeking", MPV_FORMAT_FLAG, &seeking);
+        mpv_get_property(mpv_, "paused-for-cache", MPV_FORMAT_FLAG, &buffering);
+        if (seeking || buffering) { reset(); return; }
+        qint64 drops = 0;
+        if (!mpvInt64Property("frame-drop-count", drops)) return;
+        if (!interpolationWarmup_.isValid() || interpolationWarmup_.elapsed() < 3000
+            || interpolationLastDrops_ < 0 || drops < interpolationLastDrops_) {
+            if (!interpolationWarmup_.isValid()) interpolationWarmup_.start();
+            interpolationLastDrops_ = drops;
+            interpolationSample_.restart();
+            return;
+        }
+        double fps = 0, speed = 1, avsync = 0;
+        mpv_get_property(mpv_, "container-fps", MPV_FORMAT_DOUBLE, &fps);
+        mpv_get_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &speed);
+        mpv_get_property(mpv_, "avsync", MPV_FORMAT_DOUBLE, &avsync);
+        const double target = (interpolation_->mode() == InterpolationController::Mode::Rife60 ? 60 : fps * 2) * speed;
+        const double seconds = qMax(0.001, interpolationSample_.restart() / 1000.0);
+        const double lostPerSecond = (drops - interpolationLastDrops_) / seconds;
+        interpolationLastDrops_ = drops;
+        const bool overloaded = lostPerSecond > qMax(8.0, target * 0.25) || std::abs(avsync) > 0.5;
+        interpolationSlowSamples_ = overloaded ? interpolationSlowSamples_ + 1 : 0;
+        if (interpolationSlowSamples_ >= 3) {
+            interpolationMode_->setCurrentIndex(0);
+            showToast("Native-resolution interpolation cannot keep up on this video. "
+                      "Original frame rate restored to keep playback smooth; resolution is unchanged.", true);
+            reset();
+        }
+    });
+    healthTimer->start();
 
     mpv_set_wakeup_callback(mpv_, &MainWindow::wakeup, this);
 
@@ -713,6 +856,7 @@ void MainWindow::handleEvent(mpv_event *event)
             updateTimeLabel();
         } else if (name == "pause" && property->format == MPV_FORMAT_FLAG) {
             paused_ = *static_cast<int *>(property->data) != 0;
+            if (frc_) frc_->setPaused(paused_);
             updatePlaybackUi();
             updateCenterState();
             if (paused_) {
@@ -738,8 +882,22 @@ void MainWindow::handleEvent(mpv_event *event)
             if (playerChrome_) playerChrome_->setBuffered(*static_cast<double *>(property->data));
         } else if (name == "video-params/h" && property->format == MPV_FORMAT_INT64) {
             updateQualityBadge();
+            qint64 w = 0, h = 0;
+            if (frc_ && mpvInt64Property("video-params/w", w) && mpvInt64Property("video-params/h", h)) {
+                frc_->setSourceSize(QSize(int(w), int(h)));
+            }
         }
+    } else if (event->event_id == MPV_EVENT_SEEK) {
+        // Never interpolate between frames from before and after a seek.
+        if (frc_) frc_->resetTimeline();
+        interpolationWarmup_.restart();
+        interpolationLastDrops_ = -1;
+        interpolationSlowSamples_ = 0;
     } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
+        if (frc_) frc_->resetTimeline();
+        interpolationWarmup_.restart();
+        interpolationLastDrops_ = -1;
+        interpolationSlowSamples_ = 0;
         mediaLoaded_ = true;
         paused_ = false;
         eofReached_ = false;
@@ -808,8 +966,54 @@ void MainWindow::handleEvent(mpv_event *event)
 
 void MainWindow::interpolationModeChanged(int index)
 {
+    interpolationWarmup_.restart();
+    interpolationLastDrops_ = -1;
+    interpolationSlowSamples_ = 0;
+    if (!mediaLoaded_ || !video_ || !video_->isRenderReady()) {
+        const QSignalBlocker blocker(interpolationMode_);
+        interpolationMode_->setCurrentIndex(frc_ && frc_->isEnabled() ? frcMenuIndex_
+                                            : interpolation_ ? int(interpolation_->mode()) : 0);
+        syncChromeSettings();
+        showToast("Open a video before changing frame interpolation.");
+        return;
+    }
     if (!interpolation_ || index < 0) {
         return;
+    }
+
+    if (isFrcMode(index)) {
+        // Post-render AMD FRC replaces the VapourSynth path entirely.
+        frc_->setTargetFps(frcTargetFor(index));
+        frcMenuIndex_ = index;
+        if (frc_->isEnabled()) {
+            updateQualityBadge();
+            syncChromeSettings();
+            showToast(QString("Smoothness: %1").arg(interpolationMode_->itemText(index)));
+            return;
+        }
+        QString error;
+        if (interpolation_->mode() != InterpolationController::Mode::Off) {
+            interpolation_->setMode(InterpolationController::Mode::Off, &error);
+        }
+        double fps = 0.0, speed = 1.0;
+        mpv_get_property(mpv_, "container-fps", MPV_FORMAT_DOUBLE, &fps);
+        mpv_get_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &speed);
+        frc_->setSourceFps(fps, speed);
+        if (!frc_->setEnabled(true, &error)) {
+            const QSignalBlocker blocker(interpolationMode_);
+            interpolationMode_->setCurrentIndex(0);
+            updateQualityBadge();
+            syncChromeSettings();
+            showInterpolationError(error);
+            return;
+        }
+        updateQualityBadge();
+        syncChromeSettings();
+        showToast(QString("Frame interpolation on: %1").arg(interpolationMode_->itemText(index)));
+        return;
+    }
+    if (frc_ && frc_->isEnabled()) {
+        frc_->setEnabled(false);
     }
 
     auto mode = InterpolationController::Mode::Off;
@@ -857,11 +1061,33 @@ void MainWindow::updateInterpolationLabels()
     double containerFps = 0.0;
     mpv_get_property(mpv_, "container-fps", MPV_FORMAT_DOUBLE, &containerFps);
     const double fps = InterpolationController::normalizedFps(containerFps);
+    if (frc_) {
+        double speed = 1.0;
+        mpv_get_property(mpv_, "speed", MPV_FORMAT_DOUBLE, &speed);
+        frc_->setSourceFps(fps > 0.0 ? fps : containerFps, speed);
+    }
 
     if (fps > 0.0) {
         interpolationMode_->setItemText(0, QString("Original (%1 fps)").arg(formatFps(fps)));
         interpolationMode_->setItemText(1, QString("%1 fps (RIFE)").arg(formatFps(fps * 2.0)));
+        interpolationMode_->setItemText(kFrcModeIndex, QString("%1 fps (AMD FRC)").arg(formatFps(fps * 2.0)));
+        // Fixed-rate FRC modes only make sense above the source rate.
+        if (auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model())) {
+            for (int i = kFrcModeIndex + 1; i < kFrcModeIndex + kFrcModeCount; ++i) {
+                QStandardItem *item = model->item(i);
+                if (!item) continue;
+                const bool usable = frc_ && frc_->isAvailable() && frcTargetFor(i) > fps + 0.5;
+                item->setEnabled(usable);
+                if (frc_ && frc_->isAvailable() && !usable) {
+                    item->setToolTip(QString("This video is already %1 fps").arg(formatFps(fps)));
+                }
+                if (!usable && interpolationMode_->currentIndex() == i) {
+                    interpolationMode_->setCurrentIndex(0); // turns FRC off via interpolationModeChanged
+                }
+            }
+        }
     } else {
+        interpolationMode_->setItemText(kFrcModeIndex, "Double frame rate (AMD FRC)");
         interpolationMode_->setItemText(0, "Original");
         interpolationMode_->setItemText(1, "Double frame rate (RIFE)");
     }
@@ -1353,7 +1579,10 @@ void MainWindow::updateQualityBadge()
     qualityPrimary_->setText(quality);
 
     const int mode = interpolationMode_ ? interpolationMode_->currentIndex() : 0;
-    if (mode == 1) {
+    if (isFrcMode(mode)) {
+        const double target = frcTargetFor(mode);
+        qualitySecondary_->setText(target > 0 ? QString("AMD FRC %1").arg(int(target)) : QString("AMD FRC"));
+    } else if (mode == 1) {
         qualitySecondary_->setText("RIFE DOUBLE");
     } else if (mode == 2) {
         qualitySecondary_->setText("RIFE 60");
@@ -1371,7 +1600,8 @@ void MainWindow::layoutOverlayWidgets()
     if (!root_ || !playerChrome_) return;
 
     playerChrome_->setGeometry(root_->rect());
-    if (video_->geometry().isEmpty() || video_->width() <= 1 || video_->height() <= 1) {
+    if (fullscreenMode_) video_->clearMask();
+    if (fullscreenMode_ || video_->geometry().isEmpty() || video_->width() <= 1 || video_->height() <= 1) {
         video_->setGeometry(root_->rect());
     }
 
@@ -1591,6 +1821,7 @@ void MainWindow::command(const QStringList &args)
 // ---- Files ------------------------------------------------------------------
 
 namespace {
+
 
 const QStringList &videoNameFilters()
 {
@@ -1954,6 +2185,7 @@ void MainWindow::toggleFullscreen()
     // frameless window maximized on a monitor without a taskbar.
     if (fullscreenMode_) {
         fullscreenMode_ = false;
+        command({"set", "panscan", "0"});
         leaveFullscreenControlsMode();
         showNormal();
         if (maximizedBeforeFullscreen_) {
@@ -1969,9 +2201,12 @@ void MainWindow::toggleFullscreen()
             toggleMaximized();
         }
         fullscreenMode_ = true;
+        command({"set", "panscan", fullscreenFill_ ? "1" : "0"});
         enterFullscreenControlsMode();
         showFullScreen();
+        applyFullscreenFrame();
         QTimer::singleShot(0, this, [this] {
+            applyFullscreenFrame(); // Qt may reset window attributes while switching state
             layoutOverlayWidgets();
             showFullscreenControls();
         });
@@ -2212,10 +2447,27 @@ void MainWindow::updateWindowState()
     }
 }
 
+void MainWindow::applyFullscreenFrame()
+{
+#ifdef Q_OS_WIN
+    // Windows 11 keeps rounding corners and drawing its 1 px window border
+    // (grey/white, theme-dependent) on a borderless fullscreen window unless
+    // told otherwise: square corners, no border, no frame extension.
+    const HWND hwnd = reinterpret_cast<HWND>(winId());
+    const DWORD noRounding = 1;              // DWMWCP_DONOTROUND
+    ::DwmSetWindowAttribute(hwnd, 33, &noRounding, sizeof(noRounding)); // DWMWA_WINDOW_CORNER_PREFERENCE
+    const COLORREF noBorder = 0xFFFFFFFE;    // DWMWA_COLOR_NONE
+    ::DwmSetWindowAttribute(hwnd, 34, &noBorder, sizeof(noBorder));     // DWMWA_BORDER_COLOR
+    const MARGINS none{0, 0, 0, 0};
+    ::DwmExtendFrameIntoClientArea(hwnd, &none);
+#endif
+}
+
 void MainWindow::applyNativeFrame()
 {
 #ifdef Q_OS_WIN
     if (fullscreenMode_) {
+        applyFullscreenFrame();
         return;
     }
     const HWND hwnd = reinterpret_cast<HWND>(winId());
@@ -2231,6 +2483,8 @@ void MainWindow::applyNativeFrame()
 
     const DWORD cornerPreference = 2;       // DWMWCP_ROUND
     ::DwmSetWindowAttribute(hwnd, 33, &cornerPreference, sizeof(cornerPreference)); // DWMWA_WINDOW_CORNER_PREFERENCE
+    const COLORREF defaultBorder = 0xFFFFFFFF; // DWMWA_COLOR_DEFAULT (undo fullscreen)
+    ::DwmSetWindowAttribute(hwnd, 34, &defaultBorder, sizeof(defaultBorder));      // DWMWA_BORDER_COLOR
     const BOOL darkMode = TRUE;
     ::DwmSetWindowAttribute(hwnd, 20, &darkMode, sizeof(darkMode));                 // DWMWA_USE_IMMERSIVE_DARK_MODE
     const MARGINS shadowMargins{0, 0, 1, 0};
@@ -2372,6 +2626,7 @@ void MainWindow::speedChanged(int index)
     static double speeds[] = {0.5, 0.75, 1.0, 1.25, 1.5, 2.0};
     if (index >= 0 && index < 6) {
         setMpvPropertyDouble("speed", speeds[index]);
+        updateInterpolationLabels();
         if (playerChrome_) playerChrome_->setSpeed(speeds[index]);
     }
 }

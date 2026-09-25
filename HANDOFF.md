@@ -1,5 +1,30 @@
 # AI Agent Handoff
 
+## AMD FRC post-render frame generation (2026-09-25, not committed)
+
+- Code: `src/frc/` — `AmfFrcInterpolator` (AMF/FRC, SimpleFRC loop), `WglDxInterop` (GL<->D3D11 textures), `ScreenInterpolationController` (worker thread, display ring, presentation timer, audio-delay compensation, stats, watchdog). Hooks in `MpvVideoWidget::requestFrame/paintGL`; menu entry index 3 in `MainWindow` (`kFrcModeIndex`). Design, measurements and why Windows.Graphics.Capture was not used: `docs/frc/RESEARCH.md`.
+- Diagnostics: `LAMBDA_FRC_LOG=<file>` (JSON line per second incl. GUI latency probe), `LAMBDA_DEBUG_GRAB` JSON has an `frc` object. Matrix switches: `LAMBDA_FRC_PROFILE` (1 HIGH, 2 SUPER), `LAMBDA_FRC_SEARCH` (0 native, 1 performance), `LAMBDA_FRC_FUTURE`, `LAMBDA_FRC_FALLBACK`; `LAMBDA_FRC_INPUT=source` runs FRC at the decoded resolution. Test scripts (not committed): `_local/tools/frctest.ps1`, `_local/tools/frclifecycle.ps1`.
+- `main.cpp` now uses swap interval 0 (see CHANGELOG); check fullscreen for tearing on other machines.
+- 60/120/200 fps: menu entries 4-6 (`kFrcTargets`), cascade in `AmfFrcInterpolator` (kMaxStages 4), tick presenter in `ScreenInterpolationController::onOutput/presentDue`. Player controls: Speed / Audio / Subtitles / Smoothness buttons (player.html/js), no Settings button; Fit/Fill under "...". Fullscreen DWM frame: `MainWindow::applyFullscreenFrame`.
+- Not done: real Comet film content / subjective artifact review, HDR output, non-AMD machines (the option is disabled with the probe's reason).
+
+## Local work awaiting owner review (2026-09-24)
+
+Not committed or pushed. Built app: `_local/app/LambdaPlayer.exe`.
+
+- Player now fills the native window; removed the inset rounded card and 200vmax masking shadow. DWM still owns outer window corners (preference 2/ROUND verified). Fullscreen assigns the native video the root rectangle immediately and rejects stale browser rectangles; CSS padding no longer animates window-state changes. Browser geometry refreshes on window class changes as well as resize.
+- mpv render callbacks are coalesced and checked with `mpv_render_context_update`. GUI-thread painting does not wait for the target timestamp; paired `video-timing-offset=0` avoids introducing the offset described in the bundled `mpv/render.h` documentation. Do not enable advanced render control without moving synchronous mpv commands off the rendering thread.
+- Player state pushes are coalesced/deduplicated; timeline-only updates skip the rest of the DOM. Geometry reads are deferred until after writes. Home removes expensive backdrop blur, static backgrounds replace continuously repainted decorative effects, offscreen hero animations pause, wheel targets are clamped as page height changes.
+- RIFE uses 4 concurrent requests / 4 buffered frames and up to 8 CPU workers, leaving scheduling headroom. GPU selection and the plugin's default GPU concurrency remain unchanged. Source colour metadata travels with each frame instead of shared mutable state, and R80 `_Range` semantics are handled correctly. Interpolation selection before media/render readiness is rejected (this previously hung the UI).
+- Added `tests/rife/color_runtime.py`, run using `_local/app/vapoursynth/python.exe`. It checks real plugin output with concurrent requests, limited/full range, BT.709/BT.601, luma preservation and output timing.
+- `LAMBDA_DEBUG_GRAB` now writes diagnostic JSON with each request. Use `name-stats.request` for JSON only: GL screenshots stall presentation and invalidate frame-drop measurements. Diagnostics contain geometry, corner preference, fps, hwdec and drop counts, never stream URLs/headers.
+
+Validation: Release build and all 8 protocol suites passed. Home scroll measurement (180 rAF frames, same local page/hardware): blur enabled median 33.3 ms / p95 50.1 ms; final build median 16.7 ms / p95 16.7 ms / max 16.8 ms. This is a local measurement, not a universal performance guarantee. HTTP add-on test through `AddonsBridge::play` with a local 640x360/30 fps clip: fullscreen video/root/window all 2560x1440; restoration to 1360x840 and maximize/fullscreen/restore checked. In-process libmpv RIFE60 produced 60.0006 fps with zero decoder/presentation drops at the sampled checkpoints before and after seeking. Original restored to 30 fps. Both colour runtime cases passed. No-media interpolation guard remained responsive.
+
+Limits: actual user Comet URLs and 1080p/4K RIFE throughput were not exercised; the local clip has no audio, so A/V sync requires an audible clip check. Streaming-server sources/pins were not changed or rebuilt. Its existing executable is included in the local deployed app.
+
+Scheduling reference: https://mpv.io/manual/stable/#video-filters-vapoursynth (auto concurrency is logical CPU count; larger buffers alone do not improve speed).
+
 ## Last Updated
 - Date: 2026-09-24
 - Model/Agent: Claude (claude-opus-5-5)

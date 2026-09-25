@@ -20,6 +20,7 @@ public:
     void setLoading(bool loading);
     void setFinished(bool finished);
     void setHasNext(bool hasNext);
+    void setFullscreenFill(bool fill);
     void setBuffered(double seconds);
     void toast(const QString &message, bool warning = false);
     void closeSettings();
@@ -50,6 +51,7 @@ signals:
     void nextRequested();
     void muteRequested();
     void fullscreenRequested();
+    void fullscreenFillRequested(bool fill);
     void activityRequested();
     void loadSubtitleRequested();
     void miniRequested();
@@ -68,16 +70,20 @@ protected:
 
 private:
     void pushState();
+    void flushState();
     void pushSettings();
     void runScript(const QString &script);
 
     QWebEngineView *view_ = nullptr;
     WindowBridge *windowBridge_ = nullptr;
     bool ready_ = false;
+    bool statePending_ = false;
+    QByteArray lastState_;
     bool loaded_ = false;
     bool loading_ = false;
     bool finished_ = false;
     bool hasNext_ = false;
+    bool fullscreenFill_ = true;
     double buffered_ = 0.0;
     bool paused_ = false;
     bool muted_ = false;

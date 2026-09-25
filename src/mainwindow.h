@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QElapsedTimer>
 #include <QMainWindow>
 #include <QRect>
 #include <QSize>
@@ -37,6 +38,10 @@ class QShowEvent;
 class WindowBridge;
 class AddonsBridge;
 
+namespace frc {
+class ScreenInterpolationController;
+}
+
 class MainWindow final : public QMainWindow
 {
     Q_OBJECT
@@ -69,6 +74,7 @@ private slots:
     void playNextInFolder();
     void toggleMiniPlayer();
     void applyNativeFrame();
+    void applyFullscreenFrame();
     void loadSubtitle();
     void togglePause();
     void toggleMute();
@@ -166,6 +172,8 @@ private:
 
     mpv_handle *mpv_ = nullptr;
     InterpolationController *interpolation_ = nullptr;
+    frc::ScreenInterpolationController *frc_ = nullptr;
+    int frcMenuIndex_ = 3; // selected AMD FRC entry
 
     QWidget *appRoot_ = nullptr;
     QStackedWidget *stack_ = nullptr;
@@ -235,6 +243,11 @@ private:
     QRect miniRestoreGeometry_;
     bool miniMode_ = false;
     bool fullscreenMode_ = false;
+    bool fullscreenFill_ = true;
+    QElapsedTimer interpolationWarmup_;
+    QElapsedTimer interpolationSample_;
+    qint64 interpolationLastDrops_ = -1;
+    int interpolationSlowSamples_ = 0;
     bool miniRestoreMaximized_ = false;
     bool maximizedBeforeFullscreen_ = false;
     bool eofReached_ = false;

@@ -63,15 +63,41 @@
     if (play) play.title = paused ? 'Play (Space)' : 'Pause (Space)';
   }
 
+  function updateTimeline() {
+    const labels = qa('.timeline-labels span');
+    if (labels[0]) labels[0].textContent = format(state.position);
+    if (labels[1]) labels[1].textContent = format(state.duration);
+    const ratio = state.duration > 0 ? clamp(state.position / state.duration) : 0;
+    const pct = (ratio * 100).toFixed(3) + '%';
+    const progress = q('.timeline .progress');
+    const glow = q('.timeline .timeline-glow');
+    const thumb = q('.timeline .thumb');
+    const buffered = q('.timeline .buffered');
+    if (progress) progress.style.width = pct;
+    if (glow) glow.style.width = pct;
+    if (thumb) thumb.style.left = pct;
+    if (buffered) buffered.style.width = (state.duration > 0 ? clamp((state.buffered || 0) / state.duration) * 100 : 0).toFixed(3) + '%';
+
+    const timeStrong = q('.timecode strong');
+    const timeRest = q('.timecode span');
+    if (timeStrong) timeStrong.textContent = format(state.position);
+    if (timeRest) timeRest.textContent = '/ ' + format(state.duration);
+
+  }
+
   function setState(next) {
+    const changed = Object.keys(next || {}).filter(key => next[key] !== state[key]);
     state = Object.assign({}, state, next || {});
+    if (changed.length && changed.every(key => ['position', 'duration', 'buffered'].includes(key))) {
+      updateTimeline();
+      return;
+    }
     if (!player) return;
     const loaded = !!state.loaded;
     const loading = !loaded && !!state.loading;
     const finished = loaded && !!state.finished;
     player.classList.toggle('media-active', loaded);
     player.classList.toggle('lambda-chrome-hidden', state.chromeVisible === false);
-    reportSubtitleInset();
     player.classList.toggle('is-loading', loading);
 
     const title = q('.media-title strong');
@@ -91,24 +117,7 @@
 
     setPlayIcon(!loaded || !!state.paused || finished);
 
-    const labels = qa('.timeline-labels span');
-    if (labels[0]) labels[0].textContent = format(state.position);
-    if (labels[1]) labels[1].textContent = format(state.duration);
-    const ratio = state.duration > 0 ? clamp(state.position / state.duration) : 0;
-    const pct = (ratio * 100).toFixed(3) + '%';
-    const progress = q('.timeline .progress');
-    const glow = q('.timeline .timeline-glow');
-    const thumb = q('.timeline .thumb');
-    const buffered = q('.timeline .buffered');
-    if (progress) progress.style.width = pct;
-    if (glow) glow.style.width = pct;
-    if (thumb) thumb.style.left = pct;
-    if (buffered) buffered.style.width = (state.duration > 0 ? clamp((state.buffered || 0) / state.duration) * 100 : 0).toFixed(3) + '%';
-
-    const timeStrong = q('.timecode strong');
-    const timeRest = q('.timecode span');
-    if (timeStrong) timeStrong.textContent = format(state.position);
-    if (timeRest) timeRest.textContent = '/ ' + format(state.duration);
+    updateTimeline();
 
     const volumeFill = q('.volume-track span');
     if (volumeFill) volumeFill.style.width = (state.muted ? 0 : Math.max(0, Math.min(100, Number(state.volume) || 0))) + '%';
@@ -143,6 +152,19 @@
     }
     const fullscreenButton = button('Fullscreen');
     if (fullscreenButton) fullscreenButton.title = document.documentElement.classList.contains('is-fullscreen') ? 'Exit fullscreen (F / Esc)' : 'Fullscreen (F)';
+    // Measure after DOM writes, once per frame; avoid synchronous layout in
+    // the middle of every playback-state update.
+    scheduleVideoRect();
+    if (changed.includes('fullscreenFill') && q('.lambda-settings.open')) {
+      renderSettings(q('.lambda-settings').dataset.focus || 'all');
+    }
+  }
+
+  let geometryPending = false;
+  function scheduleVideoRect() {
+    if (geometryPending) return;
+    geometryPending = true;
+    requestAnimationFrame(() => { geometryPending = false; reportVideoRect(); });
   }
 
   // ---- Settings panel ------------------------------------------------------
@@ -153,7 +175,7 @@
     panel.className = 'lambda-settings glass-panel';
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-label', 'Playback settings');
-    panel.innerHTML = '<div class="lambda-settings-head"><strong>Playback settings</strong><button class="lambda-settings-close" aria-label="Close settings" title="Close">×</button></div><div class="lambda-settings-body"></div>';
+    panel.innerHTML = '<div class="lambda-settings-head"><strong class="lambda-settings-title">Playback settings</strong><button class="lambda-settings-close" aria-label="Close settings" title="Close">×</button></div><div class="lambda-settings-body"></div>';
     player.appendChild(panel);
     q('.lambda-settings-close', panel).addEventListener('click', closeSettings);
     return panel;
@@ -169,6 +191,10 @@
   function renderSettings(focus='all', trigger=null) {
     const panel = ensureSettings();
     panel.dataset.focus = focus;
+    const titles = {audio: 'Audio', subtitles: 'Subtitles', interpolation: 'Smoothness', speed: 'Speed', picture: 'Fullscreen picture'};
+    const title = q('.lambda-settings-title', panel);
+    if (title) title.textContent = titles[focus] || 'Playback settings';
+    panel.setAttribute('aria-label', titles[focus] || 'Playback settings');
     const body = q('.lambda-settings-body', panel);
     const makeGroup = (name, key, items, selected, onClick) => {
       const section = document.createElement('section');
@@ -210,10 +236,13 @@
     load.addEventListener('click', () => call('action', 'load-subtitle'));
     sub.appendChild(load);
     body.appendChild(sub);
-    body.appendChild(makeGroup('Frame interpolation', 'interpolation', settings.interpolation, settings.interpolationIndex, i => call('selectInterpolation', i)));
+    body.appendChild(makeGroup('Smoothness', 'interpolation', settings.interpolation, settings.interpolationIndex, i => call('selectInterpolation', i)));
     const speeds = SPEEDS.map(v => ({label: String(v) + '×', enabled: true}));
     const selectedSpeed = Math.max(0, SPEEDS.findIndex(v => Math.abs(v - Number(state.speed || 1)) < 0.001));
     body.appendChild(makeGroup('Speed', 'speed', speeds, selectedSpeed, i => call('speed', SPEEDS[i])));
+    body.appendChild(makeGroup('Fullscreen picture', 'picture', [
+      {label: 'Fit — show whole picture'}, {label: 'Fill — crop edges'}
+    ], state.fullscreenFill === false ? 0 : 1, i => call('action', i ? 'fill-video' : 'fit-video')));
     const wasOpen = panel.classList.contains('open');
     panel.classList.add('open');
     qa('.settings-trigger').forEach(b => b.classList.toggle('active', b === trigger || (wasOpen && b.classList.contains('active') && !trigger)));
@@ -228,6 +257,8 @@
 
   function setSettings(next) {
     settings = Object.assign({}, settings, next || {});
+    const smoothness = button('Smoothness');
+    if (smoothness) smoothness.classList.toggle('interp-on', Number(settings.interpolationIndex) > 0);
     const panel = q('.lambda-settings.open');
     if (panel) renderSettings(panel.dataset.focus || 'all');
   }
@@ -245,12 +276,21 @@
     const open = button('Open file');
     if (open) { open.title = 'Open video (Ctrl+O)'; open.addEventListener('click', () => call('action','open')); }
     const more = button('More options');
-    if (more) { more.classList.add('settings-trigger'); more.addEventListener('click', () => toggleSettings('all', more)); }
+    if (more) { more.title = 'Fullscreen picture (Fit / Fill)'; more.classList.add('settings-trigger'); more.addEventListener('click', () => toggleSettings('picture', more)); }
 
     const playerMode = button('Player mode');
     if (playerMode) playerMode.addEventListener('click', () => call('action','play'));
-    const audio = button('Audio');
-    if (audio) { audio.title = 'Audio tracks'; audio.classList.add('settings-trigger'); audio.addEventListener('click', () => toggleSettings('audio', audio)); }
+    qa('button[aria-label="Audio"]').forEach(b => {
+      b.title = 'Audio tracks';
+      b.classList.add('settings-trigger');
+      b.addEventListener('click', () => toggleSettings('audio', b));
+    });
+    const smoothness = button('Smoothness');
+    if (smoothness) {
+      smoothness.title = 'Smoothness (frame interpolation)';
+      smoothness.classList.add('settings-trigger');
+      smoothness.addEventListener('click', () => toggleSettings('interpolation', smoothness));
+    }
     qa('button[aria-label="Captions"]').forEach(b => {
       b.title = 'Subtitles';
       b.classList.add('settings-trigger');
@@ -267,8 +307,6 @@
     if (next) next.addEventListener('click', () => call('action','next'));
     const vol = button('Volume');
     if (vol) vol.addEventListener('click', () => call('action','mute'));
-    const settingsButton = button('Settings');
-    if (settingsButton) { settingsButton.classList.add('settings-trigger'); settingsButton.addEventListener('click', () => toggleSettings('all', settingsButton)); }
     const fullscreen = button('Fullscreen');
     if (fullscreen) fullscreen.addEventListener('click', () => call('action','fullscreen'));
     const mini = button('Mini player');
@@ -343,13 +381,16 @@
       if (e.key === 'Escape' && q('.lambda-settings.open')) { e.stopPropagation(); closeSettings(); }
     }, true);
 
-    const ro = new ResizeObserver(reportVideoRect);
+    const ro = new ResizeObserver(scheduleVideoRect);
     ro.observe(player);
     const deck = q('.control-deck');
     if (deck) ro.observe(deck);
     player.addEventListener('pointerenter', reportSubtitleInset);
     player.addEventListener('pointerleave', reportSubtitleInset);
-    window.addEventListener('resize', reportVideoRect);
+    window.addEventListener('resize', scheduleVideoRect);
+    // Radius/position can change without a size change (fullscreen, restore).
+    new MutationObserver(scheduleVideoRect).observe(document.documentElement, {attributes: true, attributeFilter: ['class']});
+    player.addEventListener('transitionend', scheduleVideoRect);
     requestAnimationFrame(reportVideoRect);
   }
 

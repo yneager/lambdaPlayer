@@ -79,9 +79,22 @@ qt_add_executable(LambdaPlayer WIN32
   src/windowbridge.h
   src/interpolationcontroller.cpp
   src/interpolationcontroller.h
+  src/frc/amffrcinterpolator.cpp
+  src/frc/amffrcinterpolator.h
+  src/frc/screeninterpolationcontroller.cpp
+  src/frc/screeninterpolationcontroller.h
+  src/frc/wgldxinterop.cpp
+  src/frc/wgldxinterop.h
+  # AMD AMF SDK (MIT): runtime loader and helpers used by AMFFactory.
+  third_party/amf/public/common/AMFFactory.cpp
+  third_party/amf/public/common/AMFSTL.cpp
+  third_party/amf/public/common/Thread.cpp
+  third_party/amf/public/common/TraceAdapter.cpp
+  third_party/amf/public/common/Windows/ThreadWindows.cpp
 )
 
-target_include_directories(LambdaPlayer PRIVATE "${MPV_INCLUDE_DIR}")
+target_include_directories(LambdaPlayer PRIVATE "${MPV_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src"
+                           "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amf")
 target_link_libraries(LambdaPlayer PRIVATE lambda_stremio Qt6::Widgets Qt6::OpenGLWidgets Qt6::Quick Qt6::WebEngineWidgets Qt6::WebChannel "${MPV_LIBRARY}")
 
 set(VUI_RESOURCE_FILES
@@ -112,6 +125,8 @@ if(WIN32)
   target_compile_definitions(LambdaPlayer PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   # dwmapi: rounded corners / shadow for the custom-framed window.
   target_link_libraries(LambdaPlayer PRIVATE dwmapi)
+  # AMD FRC backend: Direct3D 11 + DXGI; AMF itself is loaded at runtime.
+  target_link_libraries(LambdaPlayer PRIVATE d3d11 dxgi winmm ole32 opengl32)
 endif()
 
 if(MSVC)

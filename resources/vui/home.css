@@ -41,6 +41,15 @@ html.is-maximized .nav-shell{padding-top:14px}
 .pop-btn.primary:hover{filter:brightness(1.05)}
 .pop-btn:active{transform:scale(.97)}
 
+/* Avoid repainting large blurred surfaces behind every scroll frame. */
+.glass{backdrop-filter:none;-webkit-backdrop-filter:none}
+.aurora{filter:none;background:radial-gradient(ellipse,var(--violet),transparent 70%);animation:none}
+.aurora-b{background:radial-gradient(ellipse,var(--cyan),transparent 70%)}
+.nav.glass{backdrop-filter:none;-webkit-backdrop-filter:none;background:linear-gradient(180deg,rgba(24,29,41,.97),rgba(9,12,18,.96))}
+.card-badge,.mini-play{backdrop-filter:none;background-color:rgba(12,16,23,.85)}
+.hero-grid,.star-field{animation:none}
+.hero.is-offscreen *,.hero.is-offscreen::before,.hero.is-offscreen *::before,.hero.is-offscreen *::after{animation-play-state:paused!important}
+
 /* Home at small window sizes (desktop window, not phone). */
 @media(max-width:900px){.nav{gap:18px}.nav-links{gap:16px}}
 @media(max-width:760px){.nav-links a:nth-child(3),.nav-links a:nth-child(4){display:none}}

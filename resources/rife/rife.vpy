@@ -27,6 +27,9 @@ from fractions import Fraction
 import vapoursynth as vs
 
 core = vs.core
+# Bound CPU conversion/scene-detection work so decode, audio and Qt retain
+# scheduling headroom. GPU inference keeps the plugin's two-worker default.
+core.num_threads = max(1, min(8, (os.cpu_count() or 2) - 2))
 
 RIFE_PLUGIN_FILE = "librife_windows_x86-64.dll"
 MISC_PLUGIN_FILE = "MiscFilters.dll"
@@ -144,10 +147,13 @@ class _ColorState:
         if matrix not in _ZIMG_MATRICES:
             matrix = self.default_matrix
         self.matrix = matrix
-        color_range = props.get("_ColorRange")
+        color_range = props.get("_Range")
         if color_range in (0, 1):
-            # VapourSynth frame property: 0 = full range, 1 = limited range.
-            self.limited_range = color_range == 1
+            # R80 uses _Range: 0 = limited, 1 = full. Reading the deprecated
+            # _ColorRange through .get() does not invert the enum in R80.
+            self.limited_range = color_range == 0
+        elif "_ColorRange" in props:
+            self.limited_range = props["_ColorRange"] == 1
         return self.matrix
 
 
@@ -167,7 +173,6 @@ def build(clip):
             raise vs.Error(f"Missing RIFE model file: {os.path.join(model_path, model_file)}")
 
     source_format = clip.format.id
-    state = _ColorState(clip.width, clip.height)
 
     # Scene-change detection must run on the YUV clip (plugin requirement).
     # The resulting _SceneChangeNext property survives the RGB conversion.
@@ -179,11 +184,17 @@ def build(clip):
     to_rgb_cache = {}
 
     def to_rgb(n, f):
+        state = _ColorState(clip.width, clip.height)
         matrix = state.update_from_props(f.props)
-        converted = to_rgb_cache.get(matrix)
+        key = (matrix, state.limited_range)
+        converted = to_rgb_cache.get(key)
         if converted is None:
             converted = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in=matrix)
-            to_rgb_cache[matrix] = converted
+            # RGB conversion changes _ColorRange. Carry source colour metadata
+            # on each frame so concurrent output requests can restore it.
+            converted = core.std.SetFrameProps(converted, LambdaMatrix=matrix,
+                                               LambdaLimited=int(state.limited_range))
+            to_rgb_cache[key] = converted
         return converted
 
     rgb_template = core.std.BlankClip(clip, format=vs.RGBS, keep=True)
@@ -206,14 +217,18 @@ def build(clip):
     to_yuv_cache = {}
 
     def to_yuv(n, f):
-        key = (state.matrix, state.limited_range)
+        # Frame requests run concurrently: do not read mutable colour state
+        # left behind by a different (possibly future) input frame.
+        matrix = f.props.get("LambdaMatrix", _guess_matrix(clip.width, clip.height))
+        limited_range = bool(f.props.get("LambdaLimited", 1))
+        key = (matrix, limited_range)
         converted = to_yuv_cache.get(key)
         if converted is None:
             converted = core.resize.Bicubic(
                 interpolated,
                 format=source_format,
-                matrix=state.matrix,
-                range=0 if state.limited_range else 1,
+                matrix=matrix,
+                range=0 if limited_range else 1,
             )
             to_yuv_cache[key] = converted
         return converted

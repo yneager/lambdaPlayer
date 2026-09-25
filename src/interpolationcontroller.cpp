@@ -185,7 +185,10 @@ bool InterpolationController::addFilter(Mode mode, QString *error)
 
     const QString spec = QStringLiteral("@") + QLatin1String(kFilterLabel)
                          + QStringLiteral(":vapoursynth=file=") + quoted(script)
-                         + QStringLiteral(":user-data=") + quoted(userData);
+                         + QStringLiteral(":user-data=") + quoted(userData)
+                         // Auto uses all logical CPUs and queues too many
+                         // large RGB frames on high-core-count machines.
+                         + QStringLiteral(":concurrent-frames=4:buffered-frames=4");
 
     const QByteArray specUtf8 = spec.toUtf8();
     const char *args[] = {"vf", "add", specUtf8.constData(), nullptr};
