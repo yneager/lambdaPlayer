@@ -173,7 +173,7 @@ private:
     mpv_handle *mpv_ = nullptr;
     InterpolationController *interpolation_ = nullptr;
     frc::ScreenInterpolationController *frc_ = nullptr;
-    int frcMenuIndex_ = 3; // selected AMD FRC entry
+    int frcMenuIndex_ = 7; // selected AMD FRC entry
 
     QWidget *appRoot_ = nullptr;
     QStackedWidget *stack_ = nullptr;

@@ -94,6 +94,7 @@ ScreenInterpolationController::~ScreenInterpolationController()
         slots_.clear();
     }
     amf_.reset();
+    generic_.reset();
     if (deviceContext_) deviceContext_->Release();
     if (device_) device_->Release();
 }
@@ -102,7 +103,7 @@ ScreenInterpolationController::~ScreenInterpolationController()
 
 bool ScreenInterpolationController::ensureDevice(QString *error)
 {
-    if (device_ && amf_ && amf_->isOpen()) return true;
+    if (device_) return true;
 
     // Use the adapter that runs the OpenGL context (interop requires one GPU).
     const QString renderer = QString::fromLatin1(
@@ -154,8 +155,7 @@ bool ScreenInterpolationController::ensureDevice(QString *error)
         multithread->SetMultithreadProtected(TRUE);
         multithread->Release();
     }
-    amf_ = std::make_unique<AmfFrcInterpolator>();
-    return amf_->open(device_, error);
+    return true;
 }
 
 bool ScreenInterpolationController::ensureGl(QOpenGLContext *context, QString *error)
@@ -174,29 +174,65 @@ bool ScreenInterpolationController::probe(QOpenGLContext *context, QString *reas
     }
     probed_ = true;
     QString error;
-    available_ = ensureDevice(&error) && ensureGl(context, &error);
-    if (available_) {
-        // Register and lock one AMF surface to prove the interop really works.
-        QString initError;
-        if (!amf_->init(1280, 720, settings_, 1, &initError)) {
-            available_ = false;
-            error = initError;
-        } else {
-            amf::AMFSurfacePtr surface = amf_->allocInput(nullptr);
-            auto *texture = surface ? static_cast<ID3D11Texture2D *>(surface->GetPlaneAt(0)->GetNative()) : nullptr;
-            const WglDxInterop::Texture *view = texture ? interop_->textureFor(texture, &error) : nullptr;
-            available_ = view && interop_->lock(view);
-            if (available_) interop_->unlock(view);
-            if (texture) interop_->release(texture);
-            amf_->terminate();
-        }
+    const bool deviceReady = ensureDevice(&error);
+    if (deviceReady) videoProcessorProbe_ = probeD3D11VideoProcessorFrc(device_, deviceContext_);
+    const bool commonReady = deviceReady && ensureGl(context, &error);
+    auto probeBackend = [this](FrameInterpolator *backend, QString *why) {
+        if (!backend->open(device_, why)) return false;
+        if (!backend->initialize(1280, 720, settings_, 1, why)) return false;
+        GpuFrame frame = backend->allocateInput(why);
+        const WglDxInterop::Texture *view = frame.texture ? interop_->textureFor(frame.texture, why) : nullptr;
+        const bool works = view && interop_->lock(view);
+        if (works) interop_->unlock(view);
+        if (frame.texture) interop_->release(frame.texture);
+        backend->terminate();
+        if (!works && why && why->isEmpty()) *why = QStringLiteral("OpenGL/D3D11 texture interop probe failed");
+        return works;
+    };
+    if (commonReady) {
+        amf_ = std::make_unique<AmfFrcInterpolator>();
+        generic_ = std::make_unique<GenericD3D11Fruc>();
+        amfAvailable_ = probeBackend(amf_.get(), &amfUnavailableReason_);
+        genericAvailable_ = probeBackend(generic_.get(), &genericUnavailableReason_);
+        if (!amfAvailable_ && !genericAvailable_ && interop_) interop_->close();
+    } else {
+        amfUnavailableReason_ = error;
+        genericUnavailableReason_ = error;
     }
-    if (!available_) {
-        unavailableReason_ = error.isEmpty() ? QStringLiteral("unknown error") : error;
-        if (interop_) interop_->close();
+    available_ = amfAvailable_ || genericAvailable_;
+    if (available_) {
+        if (adapterName_.isEmpty()) adapterName_ = QStringLiteral("D3D11 adapter");
+        unavailableReason_.clear();
+    } else {
+        unavailableReason_ = genericUnavailableReason_.isEmpty() ? amfUnavailableReason_ : genericUnavailableReason_;
     }
     if (reason) *reason = unavailableReason_;
     return available_;
+}
+
+bool ScreenInterpolationController::isAvailable(Backend backend) const
+{
+    return backend == Backend::GenericD3D11 ? genericAvailable_ : amfAvailable_;
+}
+
+QString ScreenInterpolationController::unavailableReason(Backend backend) const
+{
+    return backend == Backend::GenericD3D11 ? genericUnavailableReason_ : amfUnavailableReason_;
+}
+
+FrameInterpolator *ScreenInterpolationController::activeInterpolator() const
+{
+    return backend_ == Backend::GenericD3D11 ? static_cast<FrameInterpolator *>(generic_.get())
+                                             : static_cast<FrameInterpolator *>(amf_.get());
+}
+
+void ScreenInterpolationController::setBackend(Backend backend)
+{
+    if (backend_ == backend) return;
+    if (enabled_) setEnabled(false);
+    backend_ = backend;
+    configuredSize_ = QSize();
+    emit repaintRequested();
 }
 
 // ---- enable / lifecycle -------------------------------------------------------------
@@ -205,8 +241,9 @@ bool ScreenInterpolationController::setEnabled(bool enabled, QString *error)
 {
     if (enabled == enabled_) return true;
     if (enabled) {
-        if (!available_) {
-            if (error) *error = unavailableReason_.isEmpty() ? QStringLiteral("AMD FRC is not available") : unavailableReason_;
+        if (!isAvailable(backend_)) {
+            const QString why = unavailableReason(backend_);
+            if (error) *error = why.isEmpty() ? QStringLiteral("Selected FRC backend is not available") : why;
             return false;
         }
         enabled_ = true;
@@ -244,7 +281,7 @@ void ScreenInterpolationController::stopPipeline()
     shownSlot_ = -1;
     configuredSize_ = QSize();
     configuring_ = false;
-    if (amf_) amf_->terminate();
+    if (FrameInterpolator *backend = activeInterpolator()) backend->terminate();
 }
 
 void ScreenInterpolationController::fail(const QString &reason)
@@ -276,7 +313,7 @@ void ScreenInterpolationController::resetTimeline()
     queue_.clear();
     presentTimer_.stop();
     shownSlot_ = -1;
-    lastInput_ = nullptr;
+    lastInput_ = {};
     lastCaptureNs_ = 0;
     epochValid_ = false;
     shownContent_ = -1.0;
@@ -294,13 +331,25 @@ void ScreenInterpolationController::resetTimeline()
 
 void ScreenInterpolationController::setSourceFps(double fps, double speed)
 {
+    const double previousRate = 1e9 / sourceIntervalNs();
     fps_ = fps;
     speed_ = speed > 0 ? speed : 1.0;
+    if (enabled_ && std::abs((1e9 / sourceIntervalNs()) - previousRate) > 0.01) {
+        configuredSize_ = QSize();
+        pendingSize_ = QSize();
+        requestedSize_ = QSize();
+    }
 }
 
 void ScreenInterpolationController::setTargetFps(double fps)
 {
-    targetFps_ = fps > 0 ? fps : 0.0;
+    const double next = fps > 0 ? fps : 0.0;
+    if (std::abs(targetFps_ - next) > 0.01 && enabled_) {
+        configuredSize_ = QSize();
+        pendingSize_ = QSize();
+        requestedSize_ = QSize();
+    }
+    targetFps_ = next;
     emit repaintRequested(); // the next captured frame reconfigures if needed
 }
 
@@ -312,6 +361,7 @@ double ScreenInterpolationController::outputRate() const
 
 int ScreenInterpolationController::stagesNeeded() const
 {
+    if (backend_ == Backend::GenericD3D11) return 1;
     if (targetFps_ <= 0) return 1;
     const double ratio = targetFps_ / (1e9 / sourceIntervalNs());
     const double exact = std::log2(ratio);
@@ -356,7 +406,8 @@ bool ScreenInterpolationController::createSlots(int width, int height, QString *
     desc.Height = UINT(height);
     desc.MipLevels = 1;
     desc.ArraySize = 1;
-    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.Format = backend_ == Backend::GenericD3D11 ? DXGI_FORMAT_R8G8B8A8_UNORM
+                                                   : DXGI_FORMAT_B8G8R8A8_UNORM;
     desc.SampleDesc.Count = 1;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
     std::lock_guard lock(slotMutex_);
@@ -387,7 +438,7 @@ void ScreenInterpolationController::destroySlots()
 
 void ScreenInterpolationController::releaseGl()
 {
-    lastInput_ = nullptr;
+    lastInput_ = {};
     destroySlots();
     if (interop_) interop_->close();
     glContext_ = nullptr;
@@ -454,6 +505,8 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
         job.width = physicalSize.width();
         job.height = physicalSize.height();
         job.stages = stages;
+        job.sourceFps = 1e9 / sourceIntervalNs();
+        job.outputFps = outputRate();
         job.generation = generation_;
         post(std::move(job));
         return false;
@@ -469,12 +522,13 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
         }
     }
 
-    amf::AMFSurfacePtr surface = amf_->allocInput(&error);
-    if (!surface) {
+    FrameInterpolator *backend = activeInterpolator();
+    GpuFrame surface = backend ? backend->allocateInput(&error) : GpuFrame{};
+    if (!surface.texture || !surface.owner) {
         fail(error);
         return false;
     }
-    auto *texture = static_cast<ID3D11Texture2D *>(surface->GetPlaneAt(0)->GetNative());
+    auto *texture = surface.texture;
     const WglDxInterop::Texture *view = interop_->textureFor(texture, &error);
     const qint64 t0 = nowNs();
     if (!view || !interop_->lock(view)) {
@@ -501,9 +555,8 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
     ++seq_;
     captureTimes_[size_t(seq_ % kCaptureRing)] = now;
     ++counters_.captures;
-    surface->SetPts(seq_);
     if (shownSlot_ < 0 && queue_.empty()) {
-        lastInput_ = texture; // until FRC output arrives (start, seek, resume)
+        lastInput_ = surface; // until FRC output arrives (start, seek, resume)
     }
 
     Job job;
@@ -529,7 +582,7 @@ bool ScreenInterpolationController::paint(unsigned int targetFbo, const QSize &p
         std::lock_guard lock(slotMutex_);
         if (shownSlot_ >= 0 && shownSlot_ < int(slots_.size())) texture = slots_[size_t(shownSlot_)].texture;
     }
-    if (!texture) texture = lastInput_;
+    if (!texture) texture = lastInput_.texture;
     if (!texture || !interop_ || !interop_->isOpen()) return false;
 
     QString error;
@@ -601,20 +654,28 @@ void ScreenInterpolationController::workerLoop()
 
         if (job.kind == Job::Kind::Configure) {
             QString error;
-            const bool ok = amf_->init(job.width, job.height, settings_, job.stages, &error);
+            FrameInterpolator *backend = activeInterpolator();
+            bool ok = false;
+            if (backend == generic_.get()) {
+                ok = generic_->initialize(job.width, job.height, settings_, job.stages,
+                                          job.sourceFps, job.outputFps, &error);
+            } else if (backend) {
+                ok = backend->initialize(job.width, job.height, settings_, job.stages, &error);
+            }
             QMetaObject::invokeMethod(this, [this, ok, error, w = job.width, h = job.height, st = job.stages, g = job.generation] {
                 onConfigured(ok, error, w, h, st, g);
             }, Qt::QueuedConnection);
             continue;
         }
         if (job.kind == Job::Kind::Flush) {
-            amf_->flush();
+            if (FrameInterpolator *backend = activeInterpolator()) backend->flush();
             continue;
         }
         if (job.generation != workerGeneration_.load()) continue; // before a seek/flush
 
         QString error;
-        const bool ok = amf_->process(job.surface, double(job.seq), [&](const AmfFrcInterpolator::Output &output) {
+        FrameInterpolator *backend = activeInterpolator();
+        const bool ok = backend && backend->processFrame(job.surface, double(job.seq), [&](const InterpolatedFrame &output) {
             ++outputs_;
             if (output.content != std::floor(output.content)) ++generated_;
             int slotIndex = -1;
@@ -633,8 +694,7 @@ void ScreenInterpolationController::workerLoop()
                     return;
                 }
                 // One GPU copy per output: FRC's pooled surface -> display slot.
-                deviceContext_->CopyResource(slots_[size_t(slotIndex)].texture,
-                                             static_cast<ID3D11Texture2D *>(output.surface->GetPlaneAt(0)->GetNative()));
+                deviceContext_->CopyResource(slots_[size_t(slotIndex)].texture, output.frame.texture);
                 deviceContext_->Flush();
             }
             const qint64 readyNs = clock_.nsecsElapsed();
@@ -643,8 +703,8 @@ void ScreenInterpolationController::workerLoop()
             }, Qt::QueuedConnection);
         }, &error);
         ++submitted_;
-        lastSubmitStatus_ = amf_->lastSubmitStatus();
-        lastQueryStatus_ = amf_->lastQueryStatus();
+        lastSubmitStatus_ = backend ? backend->lastSubmitStatus() : 0;
+        lastQueryStatus_ = backend ? backend->lastQueryStatus() : 0;
         if (!ok) {
             QMetaObject::invokeMethod(this, [this, error] { fail(QStringLiteral("AMD FRC stopped: ") + error); },
                                       Qt::QueuedConnection);
@@ -798,7 +858,7 @@ void ScreenInterpolationController::presentDue()
             shownSlot_ = chosen;
             slots_[size_t(chosen)].state = Slot::State::Shown;
         }
-        lastInput_ = nullptr;
+        lastInput_ = {};
         lastPresentedTick_ = tick;
         shownContent_ = shown.content;
         ++counters_.presented;
@@ -875,7 +935,8 @@ void ScreenInterpolationController::logStats()
     }
     if (overloadedSeconds_ >= 4) {
         overloadedSeconds_ = 0;
-        fail(QStringLiteral("AMD FRC could not keep up (%1 of %2 frames/s presented)")
+        fail(QStringLiteral("%1 could not keep up (%2 of %3 frames/s presented)")
+                 .arg(activeInterpolator() ? activeInterpolator()->name() : QStringLiteral("Frame interpolation"))
                  .arg(rates_.presentedPerSec, 0, 'f', 1).arg(expected, 0, 'f', 1));
     }
 }
@@ -883,14 +944,32 @@ void ScreenInterpolationController::logStats()
 QJsonObject ScreenInterpolationController::stats() const
 {
     QJsonObject o;
-    o.insert("available", available_);
-    o.insert("unavailableReason", unavailableReason_);
+    o.insert("available", isAvailable(backend_));
+    o.insert("amdAmfAvailable", amfAvailable_);
+    o.insert("genericD3d11Available", genericAvailable_);
+    o.insert("backend", activeInterpolator() ? activeInterpolator()->name() : QString());
+    o.insert("unavailableReason", unavailableReason(backend_));
     o.insert("enabled", enabled_);
     o.insert("paused", paused_);
     o.insert("adapter", adapterName_);
+    o.insert("d3d11VideoProcessorFrcAdvertised", videoProcessorProbe_.frameRateConversion);
+    o.insert("d3d11VideoProcessorBGRAInput", videoProcessorProbe_.bgraInput);
+    o.insert("d3d11VideoProcessorBGRAOutput", videoProcessorProbe_.bgraOutput);
+    o.insert("d3d11VideoProcessorCreated", videoProcessorProbe_.processorCreated);
+    o.insert("d3d11VideoProcessorStreamRateConfigured", videoProcessorProbe_.streamRateConfigured);
+    o.insert("d3d11VideoProcessorRateModeCount", int(videoProcessorProbe_.rateConversionModeCount));
+    o.insert("d3d11VideoProcessorRateModeIndex", int(videoProcessorProbe_.selectedRateConversionIndex));
+    o.insert("d3d11VideoProcessorPastFrames", int(videoProcessorProbe_.pastFrames));
+    o.insert("d3d11VideoProcessorFutureFrames", int(videoProcessorProbe_.futureFrames));
+    o.insert("d3d11VideoProcessorTestWidth", int(videoProcessorProbe_.testedWidth));
+    o.insert("d3d11VideoProcessorTestHeight", int(videoProcessorProbe_.testedHeight));
+    o.insert("d3d11VideoProcessorProbeReason", videoProcessorProbe_.reason);
     o.insert("amfRuntime", amf_ ? amf_->runtimeVersion() : QString());
+    o.insert("genericGpuExecutionMs", generic_ ? generic_->lastGpuExecutionMs() : 0.0);
+    o.insert("genericCpuSubmitMs", generic_ ? generic_->lastCpuSubmitMs() : 0.0);
     o.insert("capture", "mpv render output -> D3D11 texture (WGL_NV_DX_interop2)");
-    o.insert("format", "BGRA8 (same 8-bit output as the normal path)");
+    o.insert("format", backend_ == Backend::GenericD3D11 ? "RGBA8 (same 8-bit output; BGRA inputs swizzled on GPU)"
+                                                          : "BGRA8 (same 8-bit output as the normal path)");
     o.insert("inputWidth", configuredSize_.width());
     o.insert("inputHeight", configuredSize_.height());
     o.insert("devicePixelRatio", devicePixelRatio_);
@@ -930,7 +1009,9 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("targetFps", targetFps_ > 0 ? targetFps_ : outputRate());
     o.insert("outputRate", outputRate());
     o.insert("frcStages", configuredStages_);
-    o.insert("gridFps", (1e9 / sourceIntervalNs()) * double(1 << std::max(0, configuredStages_)));
+    o.insert("gridFps", backend_ == Backend::GenericD3D11
+                            ? outputRate()
+                            : (1e9 / sourceIntervalNs()) * double(1 << std::max(0, configuredStages_)));
     o.insert("displaySlots", slotCount_);
     o.insert("skipped", counters_.skipped);
     o.insert("latencyMs", latencyNs_ / kMs);

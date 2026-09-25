@@ -14,6 +14,14 @@ QString resultText(AMF_RESULT res)
     return QStringLiteral("AMF error %1").arg(int(res));
 }
 
+GpuFrame frameFor(amf::AMFSurfacePtr surface)
+{
+    if (!surface || !surface->GetPlaneAt(0)) return {};
+    auto *texture = static_cast<ID3D11Texture2D *>(surface->GetPlaneAt(0)->GetNative());
+    auto owner = std::make_shared<amf::AMFSurfacePtr>(std::move(surface));
+    return {texture, std::move(owner)};
+}
+
 } // namespace
 
 AmfFrcInterpolator::~AmfFrcInterpolator()
@@ -131,7 +139,7 @@ void AmfFrcInterpolator::close()
     }
 }
 
-amf::AMFSurfacePtr AmfFrcInterpolator::allocInput(QString *error)
+amf::AMFSurfacePtr AmfFrcInterpolator::allocAmfInput(QString *error)
 {
     amf::AMFSurfacePtr surface;
     const AMF_RESULT res = context_->AllocSurface(amf::AMF_MEMORY_DX11, amf::AMF_SURFACE_BGRA, width_, height_, &surface);
@@ -141,7 +149,12 @@ amf::AMFSurfacePtr AmfFrcInterpolator::allocInput(QString *error)
     return surface;
 }
 
-void AmfFrcInterpolator::drainStage(size_t stage, const std::function<void(const Output &)> &onOutput, QString *error,
+GpuFrame AmfFrcInterpolator::allocateInput(QString *error)
+{
+    return frameFor(allocAmfInput(error));
+}
+
+void AmfFrcInterpolator::drainStage(size_t stage, const std::function<void(const InterpolatedFrame &)> &onOutput, QString *error,
                                     bool *ok)
 {
     const std::deque<double> &history = history_[stage];
@@ -164,13 +177,13 @@ void AmfFrcInterpolator::drainStage(size_t stage, const std::function<void(const
         if (stage + 1 < frc_.size()) {
             *ok = submitStage(stage + 1, out, content, onOutput, error);
         } else {
-            onOutput(Output{out, content});
+            onOutput(InterpolatedFrame{frameFor(out), content});
         }
     }
 }
 
 bool AmfFrcInterpolator::submitStage(size_t stage, const amf::AMFSurfacePtr &input, double content,
-                                     const std::function<void(const Output &)> &onOutput, QString *error)
+                                     const std::function<void(const InterpolatedFrame &)> &onOutput, QString *error)
 {
     bool ok = true;
     for (int attempt = 0; attempt < 200 && ok; ++attempt) {
@@ -197,14 +210,30 @@ bool AmfFrcInterpolator::submitStage(size_t stage, const amf::AMFSurfacePtr &inp
     return false;
 }
 
-bool AmfFrcInterpolator::process(const amf::AMFSurfacePtr &input, double content,
-                                 const std::function<void(const Output &)> &onOutput, QString *error)
+bool AmfFrcInterpolator::processAmf(const amf::AMFSurfacePtr &input, double content,
+                                    const std::function<void(const InterpolatedFrame &)> &onOutput, QString *error)
 {
     if (frc_.empty()) {
         if (error) *error = QStringLiteral("FRC is not initialized");
         return false;
     }
     return submitStage(0, input, content, onOutput, error);
+}
+
+bool AmfFrcInterpolator::processFrame(const GpuFrame &input, double content,
+                                      const OutputCallback &onOutput, QString *error)
+{
+    if (!input.texture || !input.owner) {
+        if (error) *error = QStringLiteral("AMF input frame has no owned texture");
+        return false;
+    }
+    const auto surface = std::static_pointer_cast<amf::AMFSurfacePtr>(input.owner);
+    if (!surface || !*surface) {
+        if (error) *error = QStringLiteral("AMF input surface expired before processing");
+        return false;
+    }
+    (*surface)->SetPts(amf_pts(content));
+    return processAmf(*surface, content, onOutput, error);
 }
 
 void AmfFrcInterpolator::flush()

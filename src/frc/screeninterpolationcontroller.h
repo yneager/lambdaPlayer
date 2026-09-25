@@ -36,6 +36,8 @@
 #include <mpv/client.h>
 
 #include "frc/amffrcinterpolator.h"
+#include "frc/d3d11videoprocessorprobe.h"
+#include "frc/genericd3d11fruc.h"
 
 class QOpenGLContext;
 struct ID3D11Device;
@@ -51,6 +53,7 @@ class ScreenInterpolationController final : public QObject
     Q_OBJECT
 
 public:
+    enum class Backend { GenericD3D11, AmdAmf };
     explicit ScreenInterpolationController(mpv_handle *mpv, QObject *parent = nullptr);
     ~ScreenInterpolationController() override;
 
@@ -59,11 +62,15 @@ public:
     // cached; `reason` explains an unavailable backend.
     bool probe(QOpenGLContext *context, QString *reason);
     bool isAvailable() const { return available_; }
+    bool isAvailable(Backend backend) const;
     QString unavailableReason() const { return unavailableReason_; }
+    QString unavailableReason(Backend backend) const;
     QString adapterName() const { return adapterName_; }
 
     bool setEnabled(bool enabled, QString *error = nullptr);
     bool isEnabled() const { return enabled_; }
+    void setBackend(Backend backend);
+    Backend backend() const { return backend_; }
 
     // Playback state from MainWindow.
     void setPaused(bool paused);
@@ -106,13 +113,15 @@ private:
     struct Job
     {
         enum class Kind { Configure, Frame, Flush, Quit } kind = Kind::Frame;
-        amf::AMFSurfacePtr surface;
+        GpuFrame surface;
         qint64 seq = 0;
         qint64 captureNs = 0;
         int generation = 0;
         int width = 0;
         int height = 0;
         int stages = 1;
+        double sourceFps = 0.0;
+        double outputFps = 0.0;
     };
     struct Presentation
     {
@@ -147,6 +156,7 @@ private:
     qint64 tickTime(qint64 tick) const { return epochNs_ + qint64(double(tick) * tickPeriodNs_); }
     void freeSlot(int slot);
     void logStats();
+    FrameInterpolator *activeInterpolator() const;
 
     mpv_handle *mpv_ = nullptr;
     FrcSettings settings_;
@@ -156,12 +166,19 @@ private:
     ID3D11DeviceContext *deviceContext_ = nullptr;
     QString adapterName_;
     std::unique_ptr<AmfFrcInterpolator> amf_;
+    std::unique_ptr<GenericD3D11Fruc> generic_;
     std::unique_ptr<WglDxInterop> interop_;
     QOpenGLContext *glContext_ = nullptr;
 
     bool probed_ = false;
     bool available_ = false;
     QString unavailableReason_;
+    bool amfAvailable_ = false;
+    bool genericAvailable_ = false;
+    QString amfUnavailableReason_;
+    QString genericUnavailableReason_;
+    D3D11VideoProcessorProbeResult videoProcessorProbe_;
+    Backend backend_ = Backend::AmdAmf;
     bool enabled_ = false;
     bool paused_ = false;
 
@@ -182,7 +199,7 @@ private:
     int shownSlot_ = -1;
     std::deque<Presentation> queue_;
     QTimer presentTimer_;
-    ID3D11Texture2D *lastInput_ = nullptr; // shown until the first FRC output
+    GpuFrame lastInput_; // shown until the first FRC output
 
     // Worker
     std::thread worker_;

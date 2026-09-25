@@ -65,13 +65,21 @@
 #include <dwmapi.h>
 #endif
 
-// Interpolation menu entries: 0 Original, 1 RIFE double, 2 RIFE 60,
-// 3..6 AMD FRC at 2x / 60 / 120 / 200 fps.
-static constexpr int kFrcModeIndex = 3;
-static constexpr double kFrcTargets[] = {0.0, 60.0, 120.0, 200.0};
-static constexpr int kFrcModeCount = 4;
-static bool isFrcMode(int index) { return index >= kFrcModeIndex && index < kFrcModeIndex + kFrcModeCount; }
-static double frcTargetFor(int index) { return isFrcMode(index) ? kFrcTargets[index - kFrcModeIndex] : 0.0; }
+// Interpolation modes: original/RIFE, Generic D3D11 2x/60/120/200, then AMD AMF 2x/60/120/200.
+static constexpr int kGenericFrcModeIndex = 3;
+static constexpr int kGeneric60FrcModeIndex = 4;
+static constexpr int kGeneric120FrcModeIndex = 5;
+static constexpr int kGeneric200FrcModeIndex = 6;
+static constexpr int kAmfFrcModeIndex = 7;
+static constexpr int kFrcModeCount = 8;
+static constexpr double kFrcTargets[] = {0.0, 60.0, 120.0, 200.0, 0.0, 60.0, 120.0, 200.0};
+static bool isFrcMode(int index) { return index >= kGenericFrcModeIndex && index < kGenericFrcModeIndex + kFrcModeCount; }
+static double frcTargetFor(int index) { return isFrcMode(index) ? kFrcTargets[index - kGenericFrcModeIndex] : 0.0; }
+static frc::ScreenInterpolationController::Backend frcBackendFor(int index)
+{
+    return index < kAmfFrcModeIndex ? frc::ScreenInterpolationController::Backend::GenericD3D11
+                                    : frc::ScreenInterpolationController::Backend::AmdAmf;
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -235,17 +243,21 @@ void MainWindow::buildUi()
     // chrome above it.
     video_ = new MpvVideoWidget(root_);
     connect(video_, &MpvVideoWidget::renderReady, this, [this] {
-        // Runs inside initializeGL (context current): check the AMD FRC
-        // chain once so the menu only offers what works on this PC.
+        // Runs inside initializeGL (context current): probe each GPU backend
+        // so unavailable modes are disabled with the driver's reason.
         if (frc_ && interpolationMode_) {
-            QString reason;
-            const bool available = frc_->probe(QOpenGLContext::currentContext(), &reason);
+            frc_->probe(QOpenGLContext::currentContext(), nullptr);
             if (auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model())) {
-                for (int i = kFrcModeIndex; i < kFrcModeIndex + kFrcModeCount; ++i) {
+                for (int i = kGenericFrcModeIndex; i < kGenericFrcModeIndex + kFrcModeCount; ++i) {
                     if (QStandardItem *item = model->item(i)) {
-                        item->setEnabled(available);
-                        item->setToolTip(available ? QString("AMD AMF Frame Rate Conversion on %1").arg(frc_->adapterName())
-                                                   : QString("Not available: %1").arg(reason));
+                        const auto backend = frcBackendFor(i);
+                        const bool backendAvailable = frc_->isAvailable(backend);
+                        item->setEnabled(backendAvailable);
+                        item->setToolTip(backendAvailable
+                                             ? QString("%1 on %2").arg(backend == frc::ScreenInterpolationController::Backend::GenericD3D11
+                                                                              ? "Vendor-neutral D3D11 compute" : "AMD AMF FRC",
+                                                                         frc_->adapterName())
+                                             : QString("Not available: %1").arg(frc_->unavailableReason(backend)));
                     }
                 }
             }
@@ -491,6 +503,10 @@ void MainWindow::buildUi()
     interpolationMode_->addItem("Original");
     interpolationMode_->addItem("Double frame rate (RIFE)");
     interpolationMode_->addItem("60 fps (RIFE)");
+    interpolationMode_->addItem("Double frame rate (Universal D3D11)");
+    interpolationMode_->addItem("60 fps (Universal D3D11)");
+    interpolationMode_->addItem("120 fps (Universal D3D11)");
+    interpolationMode_->addItem("200 fps (Universal D3D11)");
     interpolationMode_->addItem("Double frame rate (AMD FRC)");
     interpolationMode_->addItem("60 fps (AMD FRC)");
     interpolationMode_->addItem("120 fps (AMD FRC)");
@@ -982,7 +998,9 @@ void MainWindow::interpolationModeChanged(int index)
     }
 
     if (isFrcMode(index)) {
-        // Post-render AMD FRC replaces the VapourSynth path entirely.
+        // Post-render GPU FRC replaces the VapourSynth path entirely.
+        if (!frc_) return;
+        frc_->setBackend(frcBackendFor(index));
         frc_->setTargetFps(frcTargetFor(index));
         frcMenuIndex_ = index;
         if (frc_->isEnabled()) {
@@ -1070,15 +1088,21 @@ void MainWindow::updateInterpolationLabels()
     if (fps > 0.0) {
         interpolationMode_->setItemText(0, QString("Original (%1 fps)").arg(formatFps(fps)));
         interpolationMode_->setItemText(1, QString("%1 fps (RIFE)").arg(formatFps(fps * 2.0)));
-        interpolationMode_->setItemText(kFrcModeIndex, QString("%1 fps (AMD FRC)").arg(formatFps(fps * 2.0)));
+        interpolationMode_->setItemText(kGenericFrcModeIndex, QString("%1 fps (Universal D3D11)").arg(formatFps(fps * 2.0)));
+        interpolationMode_->setItemText(kGeneric60FrcModeIndex, "60 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kGeneric120FrcModeIndex, "120 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kGeneric200FrcModeIndex, "200 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kAmfFrcModeIndex, QString("%1 fps (AMD FRC)").arg(formatFps(fps * 2.0)));
         // Fixed-rate FRC modes only make sense above the source rate.
         if (auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model())) {
-            for (int i = kFrcModeIndex + 1; i < kFrcModeIndex + kFrcModeCount; ++i) {
+            for (int i = kGenericFrcModeIndex; i < kGenericFrcModeIndex + kFrcModeCount; ++i) {
                 QStandardItem *item = model->item(i);
                 if (!item) continue;
-                const bool usable = frc_ && frc_->isAvailable() && frcTargetFor(i) > fps + 0.5;
+                const bool available = frc_ && frc_->isAvailable(frcBackendFor(i));
+                const bool fixedRate = frcTargetFor(i) > 0.0;
+                const bool usable = available && (!fixedRate || frcTargetFor(i) > fps + 0.5);
                 item->setEnabled(usable);
-                if (frc_ && frc_->isAvailable() && !usable) {
+                if (available && fixedRate && !usable) {
                     item->setToolTip(QString("This video is already %1 fps").arg(formatFps(fps)));
                 }
                 if (!usable && interpolationMode_->currentIndex() == i) {
@@ -1087,7 +1111,11 @@ void MainWindow::updateInterpolationLabels()
             }
         }
     } else {
-        interpolationMode_->setItemText(kFrcModeIndex, "Double frame rate (AMD FRC)");
+        interpolationMode_->setItemText(kGenericFrcModeIndex, "Double frame rate (Universal D3D11)");
+        interpolationMode_->setItemText(kGeneric60FrcModeIndex, "60 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kGeneric120FrcModeIndex, "120 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kGeneric200FrcModeIndex, "200 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kAmfFrcModeIndex, "Double frame rate (AMD FRC)");
         interpolationMode_->setItemText(0, "Original");
         interpolationMode_->setItemText(1, "Double frame rate (RIFE)");
     }
@@ -1581,7 +1609,9 @@ void MainWindow::updateQualityBadge()
     const int mode = interpolationMode_ ? interpolationMode_->currentIndex() : 0;
     if (isFrcMode(mode)) {
         const double target = frcTargetFor(mode);
-        qualitySecondary_->setText(target > 0 ? QString("AMD FRC %1").arg(int(target)) : QString("AMD FRC"));
+        const QString backend = frcBackendFor(mode) == frc::ScreenInterpolationController::Backend::GenericD3D11
+            ? QStringLiteral("D3D11") : QStringLiteral("AMD FRC");
+        qualitySecondary_->setText(target > 0 ? QString("%1 %2").arg(backend).arg(int(target)) : backend);
     } else if (mode == 1) {
         qualitySecondary_->setText("RIFE DOUBLE");
     } else if (mode == 2) {

@@ -81,6 +81,11 @@ qt_add_executable(LambdaPlayer WIN32
   src/interpolationcontroller.h
   src/frc/amffrcinterpolator.cpp
   src/frc/amffrcinterpolator.h
+  src/frc/frameinterpolator.h
+  src/frc/genericd3d11fruc.cpp
+  src/frc/genericd3d11fruc.h
+  src/frc/d3d11videoprocessorprobe.cpp
+  src/frc/d3d11videoprocessorprobe.h
   src/frc/screeninterpolationcontroller.cpp
   src/frc/screeninterpolationcontroller.h
   src/frc/wgldxinterop.cpp
@@ -119,6 +124,15 @@ qt_add_resources(LambdaPlayer "vui_home"
   FILES ${VUI_RESOURCE_FILES}
 )
 
+qt_add_resources(LambdaPlayer "frc_shaders"
+  PREFIX "/frc"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/frc"
+  FILES
+    resources/frc/generic_motion.hlsl
+    resources/frc/generic_warp.hlsl
+    resources/frc/generic_copy.hlsl
+)
+
 target_compile_definitions(LambdaPlayer PRIVATE LAMBDA_VERSION="${PROJECT_VERSION}")
 
 if(WIN32)
@@ -127,6 +141,7 @@ if(WIN32)
   target_link_libraries(LambdaPlayer PRIVATE dwmapi)
   # AMD FRC backend: Direct3D 11 + DXGI; AMF itself is loaded at runtime.
   target_link_libraries(LambdaPlayer PRIVATE d3d11 dxgi winmm ole32 opengl32)
+  target_link_libraries(LambdaPlayer PRIVATE d3dcompiler)
 endif()
 
 if(MSVC)

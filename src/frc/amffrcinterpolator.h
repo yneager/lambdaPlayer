@@ -20,7 +20,7 @@
 // Not thread-safe: after init() every call must come from one thread
 // (ScreenInterpolationController's worker).
 
-#include <QString>
+#include "frc/frameinterpolator.h"
 
 #include <deque>
 #include <functional>
@@ -34,24 +34,10 @@ struct ID3D11Texture2D;
 
 namespace frc {
 
-struct FrcSettings
-{
-    amf_int64 profile = FRC_PROFILE_SUPER;
-    amf_int64 searchMode = FRC_MV_SEARCH_NATIVE;
-    bool useFutureFrame = false;
-    bool fallbackBlend = false;
-};
-
-class AmfFrcInterpolator
+class AmfFrcInterpolator final : public FrameInterpolator
 {
 public:
     static constexpr int kMaxStages = 4; // 2x .. 16x
-
-    struct Output
-    {
-        amf::AMFSurfacePtr surface;
-        double content = 0.0;       // position in source frames (fraction = generated)
-    };
 
     AmfFrcInterpolator() = default;
     ~AmfFrcInterpolator();
@@ -61,38 +47,44 @@ public:
     // Loads the AMF runtime and creates a DX11 context on `device` (which
     // must be multithread protected). Returns false with a reason when AMF
     // or its FRC component is unavailable (e.g. non-AMD GPUs).
-    bool open(ID3D11Device *device, QString *error);
+    bool open(ID3D11Device *device, QString *error) override;
     // `stages` cascaded x2 components (1..kMaxStages -> 2x .. 16x frames).
     bool init(int width, int height, const FrcSettings &settings, int stages, QString *error);
-    int stages() const { return int(frc_.size()); }
-    void terminate();
-    void close();
+    bool initialize(int width, int height, const FrcSettings &settings,
+                    int stages, QString *error) override { return init(width, height, settings, stages, error); }
+    int stages() const override { return int(frc_.size()); }
+    void terminate() override;
+    void close() override;
 
     bool isOpen() const { return context_ != nullptr; }
     int width() const { return width_; }
     int height() const { return height_; }
     FrcSettings settings() const { return settings_; }
-    QString runtimeVersion() const { return runtimeVersion_; }
+    QString runtimeVersion() const override { return runtimeVersion_; }
+    QString name() const override { return QStringLiteral("AMD AMF"); }
 
     // A BGRA DX11 surface from AMF's pool, usable as a render target.
-    amf::AMFSurfacePtr allocInput(QString *error);
+    amf::AMFSurfacePtr allocAmfInput(QString *error);
+    GpuFrame allocateInput(QString *error) override;
 
     // SimpleFRC's loop for one source frame (content = its source index):
     // submit (resubmitting while the component is full) through every stage
     // and hand each final output to `onOutput`.
-    bool process(const amf::AMFSurfacePtr &input, double content,
-                 const std::function<void(const Output &)> &onOutput, QString *error);
+    bool processAmf(const amf::AMFSurfacePtr &input, double content,
+                    const std::function<void(const InterpolatedFrame &)> &onOutput, QString *error);
+    bool processFrame(const GpuFrame &input, double content,
+                      const OutputCallback &onOutput, QString *error) override;
 
     // Drops the component's frame history (seek, resume, file change).
-    void flush();
+    void flush() override;
 
-    int lastSubmitStatus() const { return lastSubmit_; }
-    int lastQueryStatus() const { return lastQuery_; }
+    int lastSubmitStatus() const override { return lastSubmit_; }
+    int lastQueryStatus() const override { return lastQuery_; }
 
 private:
     bool submitStage(size_t stage, const amf::AMFSurfacePtr &input, double content,
-                     const std::function<void(const Output &)> &onOutput, QString *error);
-    void drainStage(size_t stage, const std::function<void(const Output &)> &onOutput, QString *error, bool *ok);
+                     const std::function<void(const InterpolatedFrame &)> &onOutput, QString *error);
+    void drainStage(size_t stage, const std::function<void(const InterpolatedFrame &)> &onOutput, QString *error, bool *ok);
     amf::AMFComponentPtr createComponent(QString *error);
 
     amf::AMFContextPtr context_;
