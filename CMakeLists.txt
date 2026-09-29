@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LambdaPlayer VERSION 0.2.5 LANGUAGES CXX)
+project(LambdaPlayer VERSION 0.2.6 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,6 +84,10 @@ qt_add_executable(LambdaPlayer WIN32
   src/frc/frameinterpolator.h
   src/frc/genericd3d11fruc.cpp
   src/frc/genericd3d11fruc.h
+  src/frc/rifed3d11.cpp
+  src/frc/rifed3d11.h
+  src/frc/computeshaders.cpp
+  src/frc/computeshaders.h
   src/frc/d3d11videoprocessorprobe.cpp
   src/frc/d3d11videoprocessorprobe.h
   src/frc/screeninterpolationcontroller.cpp
@@ -113,6 +117,7 @@ set(VUI_RESOURCE_FILES
   resources/vui/home.js
   resources/vui/window.js
   resources/vui/window.css
+  resources/vui/motion.css
 )
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/vui/InterVariable.woff2")
   list(APPEND VUI_RESOURCE_FILES resources/vui/InterVariable.woff2)
@@ -128,9 +133,13 @@ qt_add_resources(LambdaPlayer "frc_shaders"
   PREFIX "/frc"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/frc"
   FILES
+    resources/frc/generic_downscale.hlsl
     resources/frc/generic_motion.hlsl
+    resources/frc/generic_cleanup.hlsl
     resources/frc/generic_warp.hlsl
     resources/frc/generic_copy.hlsl
+    resources/frc/rife_ops.hlsl
+    resources/frc/rife_io.hlsl
 )
 
 target_compile_definitions(LambdaPlayer PRIVATE LAMBDA_VERSION="${PROJECT_VERSION}")
@@ -150,6 +159,90 @@ if(MSVC)
 endif()
 
 set_target_properties(LambdaPlayer PROPERTIES OUTPUT_NAME "LambdaPlayer")
+
+# FRC compute shaders are compiled at build time with fxc (Windows SDK) and
+# embedded as :/frc/cso/<file>_<entry>.cso. The RIFE kernels take ~25 s to
+# compile, so runtime D3DCompile is only a fallback when fxc is unavailable.
+set(FRC_SHADER_ENTRIES
+  generic_downscale:main generic_motion:main generic_cleanup:main generic_warp:main generic_copy:main
+  rife_ops:conv3x3 rife_ops:deconv rife_ops:deconv4x4s2 rife_ops:interp rife_ops:binary
+  rife_ops:activation rife_ops:copy rife_ops:pixelShuffle rife_ops:warp
+  rife_io:prepare rife_io:sceneDiff rife_io:packMotion rife_io:synthesize
+)
+file(GLOB LAMBDA_SDK_FXC_DIRS "C:/Program Files (x86)/Windows Kits/10/bin/*/x64")
+list(SORT LAMBDA_SDK_FXC_DIRS)
+list(REVERSE LAMBDA_SDK_FXC_DIRS)
+find_program(LAMBDA_FXC fxc HINTS "$ENV{WindowsSdkVerBinPath}/x64" ${LAMBDA_SDK_FXC_DIRS})
+set(FRC_CSO_FILES)
+if(WIN32 AND LAMBDA_FXC)
+  foreach(item IN LISTS FRC_SHADER_ENTRIES)
+    string(REPLACE ":" ";" parts "${item}")
+    list(GET parts 0 shader_file)
+    list(GET parts 1 shader_entry)
+    set(cso "${CMAKE_CURRENT_BINARY_DIR}/frc_cso/${shader_file}_${shader_entry}.cso")
+    add_custom_command(OUTPUT "${cso}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/frc_cso"
+      COMMAND "${LAMBDA_FXC}" /nologo /T cs_5_0 /E ${shader_entry} /O3 /Fo "${cso}"
+              "${CMAKE_CURRENT_SOURCE_DIR}/resources/frc/${shader_file}.hlsl"
+      DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/resources/frc/${shader_file}.hlsl"
+      COMMENT "fxc ${shader_file}.hlsl:${shader_entry}"
+      VERBATIM)
+    list(APPEND FRC_CSO_FILES "${cso}")
+  endforeach()
+  add_custom_target(frc_cso DEPENDS ${FRC_CSO_FILES})
+  qt_add_resources(LambdaPlayer "frc_cso"
+    PREFIX "/frc/cso"
+    BASE "${CMAKE_CURRENT_BINARY_DIR}/frc_cso"
+    FILES ${FRC_CSO_FILES}
+  )
+  add_dependencies(LambdaPlayer frc_cso)
+else()
+  message(WARNING "fxc not found: FRC compute shaders will be compiled at runtime (slow first use)")
+endif()
+
+# Offline interpolation bench (validation/quality/timing on saved frames);
+# not deployed with the app.
+option(LAMBDA_BUILD_FRC_BENCH "Build the frame-interpolation bench tool" ON)
+if(WIN32 AND LAMBDA_BUILD_FRC_BENCH)
+  qt_add_executable(frc_bench
+    tools/frc-bench/main.cpp
+    src/frc/amffrcinterpolator.cpp
+    src/frc/genericd3d11fruc.cpp
+    src/frc/rifed3d11.cpp
+    src/frc/computeshaders.cpp
+    third_party/amf/public/common/AMFFactory.cpp
+    third_party/amf/public/common/AMFSTL.cpp
+    third_party/amf/public/common/Thread.cpp
+    third_party/amf/public/common/TraceAdapter.cpp
+    third_party/amf/public/common/Windows/ThreadWindows.cpp
+  )
+  target_include_directories(frc_bench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amf")
+  target_compile_definitions(frc_bench PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(frc_bench PRIVATE Qt6::Gui d3d11 dxgi d3dcompiler winmm ole32)
+  qt_add_resources(frc_bench "frc_bench_shaders"
+    PREFIX "/frc"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/frc"
+    FILES
+      resources/frc/generic_downscale.hlsl
+      resources/frc/generic_motion.hlsl
+      resources/frc/generic_cleanup.hlsl
+      resources/frc/generic_warp.hlsl
+      resources/frc/generic_copy.hlsl
+      resources/frc/rife_ops.hlsl
+      resources/frc/rife_io.hlsl
+  )
+  if(FRC_CSO_FILES)
+    qt_add_resources(frc_bench "frc_bench_cso"
+      PREFIX "/frc/cso"
+      BASE "${CMAKE_CURRENT_BINARY_DIR}/frc_cso"
+      FILES ${FRC_CSO_FILES}
+    )
+    add_dependencies(frc_bench frc_cso)
+  endif()
+  if(MSVC)
+    target_compile_options(frc_bench PRIVATE /utf-8)
+  endif()
+endif()
 
 option(LAMBDA_BUILD_TESTS "Build the Stremio addon protocol tests" ON)
 if(LAMBDA_BUILD_TESTS)

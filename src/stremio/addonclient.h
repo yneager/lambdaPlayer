@@ -101,6 +101,9 @@ private:
 
     QNetworkReply *get(const QString &url, bool force, int timeoutMs);
     static FetchError replyError(QNetworkReply *reply, bool timedOut);
+    // Removes the disk-cache entry behind a reply that was served from the
+    // cache (true if one was removed), so the caller can refetch it.
+    bool evictUnreadableCacheEntry(QNetworkReply *reply);
 
     QNetworkAccessManager *network_ = nullptr;
     int timeoutMs_ = 15000;

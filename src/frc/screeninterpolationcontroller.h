@@ -215,12 +215,19 @@ private:
     double fps_ = 0.0;
     double speed_ = 1.0;
     qint64 lastCaptureNs_ = 0;
+    qint64 gridNs_ = 0;                  // phase-locked intended time of the last capture
     double measuredIntervalNs_ = 0.0;
     // Presentation clock: ticks at the output rate, phase-locked to content.
     bool epochValid_ = false;
     qint64 epochNs_ = 0;
+    double tickOriginContent_ = 0.0;     // content of tick 0
+    qint64 latencyChanges_ = 0;
+    qint64 latencyLowSinceNs_ = 0;
+    qint64 outputsSinceEpoch_ = 0;
+    qint64 audioDelayChanges_ = 0;
+    double contentPerTick_ = 0.0;        // source frames per output tick (configured)
+    double pendingContentPerTick_ = 0.0;
     double tickPeriodNs_ = 1e9 / 48.0;
-    qint64 nextTick_ = 0;
     qint64 lastPresentedTick_ = -1;
     double shownContent_ = -1.0;
     // L: content -> presentation latency (measured arrival p95 + margin).
@@ -229,7 +236,7 @@ private:
     qint64 outputsSeen_ = 0;
     std::vector<double> dispatchSamplesMs_;    // worker ready -> GUI thread handled
     std::vector<double> timerLateSamplesMs_;   // presentation timer lateness
-    std::vector<double> captureLockMs_, captureRenderMs_, captureUnlockMs_, paintMs_;
+    std::vector<double> captureLockMs_, captureRenderMs_, captureUnlockMs_, paintMs_, captureJitterMs_;
     // Diagnostics only (LAMBDA_FRC_LOG): GUI event-loop latency, also while
     // FRC is off, to separate pre-existing stalls from this backend.
     QTimer probeTimer_;
@@ -250,6 +257,10 @@ private:
         qint64 presented = 0;
         qint64 presentedGenerated = 0;
         qint64 late = 0;
+        qint64 lateStale = 0;      // arrived after its presentation time
+        qint64 lateTick = 0;       // mapped to an already presented tick
+        qint64 lateContent = 0;    // older content than what is shown
+        qint64 lateQueueFull = 0;  // capture skipped: worker queue full
         qint64 droppedPresentations = 0;
         qint64 skipped = 0;     // grid frames not needed for the target rate
     };
@@ -261,6 +272,10 @@ private:
     std::atomic<int> lastSubmitStatus_{0};
     std::atomic<int> lastQueryStatus_{0};
     std::atomic<double> lastProcessMs_{0.0};
+    // Worker wall time per source frame (processFrame incl. output copies);
+    // the maximum is reset by logStats().
+    std::atomic<double> workerMs_{0.0};
+    std::atomic<double> workerMaxMs_{0.0};
     double lastLagMs_ = 0.0;
     qint64 lagFrames_ = -1;
     struct Rates

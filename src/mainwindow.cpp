@@ -737,6 +737,13 @@ void MainWindow::initMpv()
         mpv_set_option_string(mpv_, "log-file", mpvLog.constData());
     }
 
+    // Developer aid: LAMBDA_MPV_OPTIONS="name=value;name=value" overrides mpv
+    // options for local experiments (applied last, before initialisation).
+    for (const QString &pair : qEnvironmentVariable("LAMBDA_MPV_OPTIONS").split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const qsizetype eq = pair.indexOf(QLatin1Char('='));
+        if (eq > 0) mpv_set_option_string(mpv_, pair.left(eq).toUtf8().constData(), pair.mid(eq + 1).toUtf8().constData());
+    }
+
     if (mpv_initialize(mpv_) < 0) {
         throw std::runtime_error("Could not initialize libmpv.");
     }
@@ -945,6 +952,15 @@ void MainWindow::handleEvent(mpv_event *event)
         QTimer::singleShot(0, this, &MainWindow::updateInterpolationLabels);
         QTimer::singleShot(0, this, &MainWindow::updateChapterInfo);
         QTimer::singleShot(0, this, &MainWindow::updateQualityBadge);
+        // Benchmark-only entry point: the normal UI remains the sole control
+        // path unless a local test explicitly requests Generic D3D11 FRC.
+        if (qEnvironmentVariable("LAMBDA_FRC_AUTOSTART") == QLatin1String("generic")) {
+            QTimer::singleShot(5000, this, [this] {
+                if (mediaLoaded_ && video_ && video_->isRenderReady()) {
+                    interpolationModeChanged(kGenericFrcModeIndex);
+                }
+            });
+        }
     } else if (event->event_id == MPV_EVENT_END_FILE) {
         auto *endFile = static_cast<mpv_event_end_file *>(event->data);
         if (endFile && endFile->reason == MPV_END_FILE_REASON_ERROR) {

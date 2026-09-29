@@ -23,6 +23,9 @@ $VapourSynthRelease = "R80"
 $RifePluginTag = "r9_mod_v33"
 $RifePluginCommit = "c3ec6aabc07c8fa37a4f58d7fed9e2ad1fc1b13f"
 $RifeModelDir = "rife-v4.6_ensembleFalse"
+# Generic D3D11 frame generation (src/frc/rifed3d11.*) runs this flownet
+# directly; same pinned commit as the plugin model above.
+$FrcModelDir = "rife-v4.26_ensembleFalse"
 $MiscFiltersTag = "R2"
 
 $Artifacts = @(
@@ -41,6 +44,12 @@ $Artifacts = @(
     @{ Name = "flownet.param"
        Url  = "https://raw.githubusercontent.com/styler00dollar/VapourSynth-RIFE-ncnn-Vulkan/$RifePluginCommit/models/$RifeModelDir/flownet.param"
        Sha256 = "AE9B08AF43FBA97E27AA2C40C04C35B1A75F637B2D2B01A941FA94361AB25CBD" },
+    @{ Name = "frc-flownet.bin"
+       Url  = "https://raw.githubusercontent.com/styler00dollar/VapourSynth-RIFE-ncnn-Vulkan/$RifePluginCommit/models/$FrcModelDir/flownet.bin"
+       Sha256 = "94D58E30B75D7C7609CFA6F3BDAD524DEDDD14F5F75E85C36D2F827EF5C64731" },
+    @{ Name = "frc-flownet.param"
+       Url  = "https://raw.githubusercontent.com/styler00dollar/VapourSynth-RIFE-ncnn-Vulkan/$RifePluginCommit/models/$FrcModelDir/flownet.param"
+       Sha256 = "79F16C28903F93F8308F0C4C947F8C7E0C17D99A57B85473E5F298DD578D137B" },
     @{ Name = "miscfilters-r2.7z"
        Url  = "https://github.com/vapoursynth/vs-miscfilters-obsolete/releases/download/$MiscFiltersTag/miscfilters-r2.7z"
        Sha256 = "54CF54C4D66151C01C1C663ED0D47CA99C7F1B0A94927BD99B35362C02172BD2" }
@@ -104,6 +113,10 @@ $modelDir = Join-Path $rifeDir "models\$RifeModelDir"
 New-Item -ItemType Directory -Force $modelDir | Out-Null
 Copy-Item $files["flownet.bin"] (Join-Path $modelDir "flownet.bin") -Force
 Copy-Item $files["flownet.param"] (Join-Path $modelDir "flownet.param") -Force
+$frcModelPath = Join-Path $rifeDir "models\$FrcModelDir"
+New-Item -ItemType Directory -Force $frcModelPath | Out-Null
+Copy-Item $files["frc-flownet.bin"] (Join-Path $frcModelPath "flownet.bin") -Force
+Copy-Item $files["frc-flownet.param"] (Join-Path $frcModelPath "flownet.param") -Force
 
 Write-Host "Installing misc.SCDetect plugin"
 & 7z x $files["miscfilters-r2.7z"] "-o$(Join-Path $work 'misc')" -y | Out-Null
@@ -126,7 +139,9 @@ $required = @(
     (Join-Path $rifeDir "librife_windows_x86-64.dll"),
     (Join-Path $rifeDir "MiscFilters.dll"),
     (Join-Path $modelDir "flownet.bin"),
-    (Join-Path $modelDir "flownet.param")
+    (Join-Path $modelDir "flownet.param"),
+    (Join-Path $frcModelPath "flownet.bin"),
+    (Join-Path $frcModelPath "flownet.param")
 )
 foreach ($r in $required) { if (-not (Test-Path $r)) { throw "Runtime file missing: $r" } }
 Write-Host "RIFE runtime assembled in $PortableDir"

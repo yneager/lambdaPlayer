@@ -97,12 +97,23 @@
     const loading = !loaded && !!state.loading;
     const finished = loaded && !!state.finished;
     player.classList.toggle('media-active', loaded);
+    player.classList.toggle('is-paused', loaded && !!state.paused);
+    player.classList.toggle('is-finished', finished);
     player.classList.toggle('lambda-chrome-hidden', state.chromeVisible === false);
     player.classList.toggle('is-loading', loading);
 
     const title = q('.media-title strong');
     const eyebrow = q('.media-title .eyebrow');
-    if (title) { title.textContent = state.title || 'Open or drop a video'; title.title = state.title || ''; }
+    if (title) {
+      const nextTitle = state.title || 'Open or drop a video';
+      if (title.textContent !== nextTitle) {
+        title.textContent = nextTitle;
+        title.classList.remove('value-change');
+        void title.offsetWidth;
+        title.classList.add('value-change');
+      }
+      title.title = state.title || '';
+    }
     if (eyebrow) eyebrow.textContent = state.eyebrow || (loaded ? 'NOW PLAYING' : 'READY');
 
     const center = q('.center-state');
@@ -132,18 +143,46 @@
     }
 
     const speed = q('.control-cluster.right .text-button');
-    if (speed) speed.textContent = String(Number(state.speed || 1).toFixed(2)).replace(/\.00$/,'').replace(/0$/,'') + '×';
+    if (speed) {
+      const nextSpeed = String(Number(state.speed || 1).toFixed(2)).replace(/\.00$/,'').replace(/0$/,'') + '×';
+      if (speed.textContent !== nextSpeed) {
+        speed.textContent = nextSpeed;
+        speed.classList.remove('value-change');
+        void speed.offsetWidth;
+        speed.classList.add('value-change');
+      }
+    }
 
     const quality = qa('.quality-badge > span:not(.status-dot)');
-    if (quality[0]) quality[0].textContent = state.qualityPrimary || 'VIDEO';
-    if (quality[1]) quality[1].textContent = state.qualitySecondary || 'ORIGINAL';
+    if (quality[0] && quality[0].textContent !== (state.qualityPrimary || 'VIDEO')) {
+      quality[0].textContent = state.qualityPrimary || 'VIDEO';
+      quality[0].classList.remove('value-change');
+      void quality[0].offsetWidth;
+      quality[0].classList.add('value-change');
+    }
+    if (quality[1] && quality[1].textContent !== (state.qualitySecondary || 'ORIGINAL')) {
+      quality[1].textContent = state.qualitySecondary || 'ORIGINAL';
+      quality[1].classList.remove('value-change');
+      void quality[1].offsetWidth;
+      quality[1].classList.add('value-change');
+    }
     const badge = q('.quality-badge');
     if (badge) badge.classList.toggle('rife-on', /RIFE/.test(state.qualitySecondary || ''));
 
     const chapterIndex = q('.scene-index');
     const chapterTitle = q('.scene-copy strong');
-    if (chapterIndex) chapterIndex.textContent = state.chapterIndex || '--';
-    if (chapterTitle) chapterTitle.textContent = state.chapterTitle || 'No chapters';
+    if (chapterIndex && chapterIndex.textContent !== (state.chapterIndex || '--')) {
+      chapterIndex.textContent = state.chapterIndex || '--';
+      chapterIndex.classList.remove('value-change');
+      void chapterIndex.offsetWidth;
+      chapterIndex.classList.add('value-change');
+    }
+    if (chapterTitle && chapterTitle.textContent !== (state.chapterTitle || 'No chapters')) {
+      chapterTitle.textContent = state.chapterTitle || 'No chapters';
+      chapterTitle.classList.remove('value-change');
+      void chapterTitle.offsetWidth;
+      chapterTitle.classList.add('value-change');
+    }
 
     const nextButton = button('Next');
     if (nextButton) {

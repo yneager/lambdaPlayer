@@ -233,9 +233,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $notes = "docs/releases/$env:GITHUB_REF_NAME.md"
           gh release view "$env:GITHUB_REF_NAME" *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Release asset upload failed" }
+            if (Test-Path $notes) {
+              gh release edit "$env:GITHUB_REF_NAME" --notes-file "$notes"
+              if ($LASTEXITCODE -ne 0) { throw "Release notes update failed" }
+            }
           } else {
-            gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --generate-notes
+            if (Test-Path $notes) {
+              gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --notes-file "$notes"
+            } else {
+              gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --generate-notes
+            }
+            if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
           }

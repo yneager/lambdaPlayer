@@ -84,7 +84,7 @@
     pop.setAttribute('role', 'dialog');
     pop.setAttribute('aria-label', 'About LAMBDA Player');
     pop.innerHTML =
-      '<div class="pop-head"><span class="brand-mark"><i></i><i></i></span><div><strong>LAMBDA Player</strong><small class="pop-version"></small></div></div>' +
+      '<div class="pop-head"><span class="brand-mark" aria-hidden="true">λ</span><div><strong>LAMBDA Player</strong><small class="pop-version"></small></div></div>' +
       '<p>Local video player built on libmpv, with optional real-time RIFE frame interpolation on any Vulkan GPU.</p>' +
       '<div class="pop-keys"><span><kbd>Space</kbd> Play / pause</span><span><kbd>←</kbd><kbd>→</kbd> Seek 5 s</span><span><kbd>F</kbd> Fullscreen</span><span><kbd>M</kbd> Mute</span><span><kbd>Ctrl</kbd><kbd>O</kbd> Open</span></div>' +
       '<div class="pop-actions"><button type="button" class="pop-btn primary" data-pop="open">Open video</button><button type="button" class="pop-btn" data-pop="licenses">Third-party licenses</button></div>';
@@ -153,14 +153,14 @@
     });
   }
 
-  // Animated mouse-wheel scrolling. Qt WebEngine hands Chromium each Windows
-  // wheel notch as a precise pixel delta, so Chromium's scroll animator never
-  // runs and the page jumps ~100px per notch. Ease toward a target instead.
-  // Touchpads, ctrl+wheel zoom, reduced motion and inner scrollers stay native.
+  // Qt WebEngine can turn a physical wheel notch into an instant pixel scroll,
+  // even with ScrollAnimatorEnabled. Animate discrete notches explicitly; the
+  // page's expensive full-screen effects are removed in home.css so this is
+  // cheap to paint. Touchpads, zoom and inner scrollers retain native input.
   function smoothWheel() {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const root = document.scrollingElement || document.documentElement;
-    let target = 0, current = 0, frame = 0, last = 0;
+    let target = 0, current = 0, velocity = 0, frame = 0, last = 0;
 
     const innerScroller = (el, dy) => {
       for (; el && el !== document.body && el !== root; el = el.parentElement) {
@@ -172,28 +172,40 @@
     };
 
     const step = now => {
-      // Someone else moved the page (scrollbar drag, keys, nav links): yield.
-      if (Math.abs(window.scrollY - current) > 2) { frame = 0; return; }
-      const dt = Math.min(64, now - (last || now - 16.7));
+      if (Math.abs(window.scrollY - current) > 3) {
+        // A scrollbar drag, keyboard command or navigation took over.
+        frame = 0;
+        return;
+      }
+      const dt = Math.min(.04, Math.max(.001, (now - (last || now - 16.7)) / 1000));
       last = now;
       target = Math.max(0, Math.min(root.scrollHeight - window.innerHeight, target));
-      current += (target - current) * (1 - Math.pow(0.82, dt / 16.7));
-      if (Math.abs(target - current) < 0.5) current = target;
+      const omega = 18;
+      const distance = current - target;
+      const impulse = (velocity + omega * distance) * dt;
+      const decay = Math.exp(-omega * dt);
+      current = target + (distance + impulse) * decay;
+      velocity = (velocity - omega * impulse) * decay;
+      if (Math.abs(target - current) < .5 && Math.abs(velocity) < 4) {
+        current = target;
+        velocity = 0;
+      }
       window.scrollTo({top: current, behavior: 'instant'});
-      // Chromium rounds/clamps scroll positions; use the actual position so
-      // rounding at the bottom cannot leave a permanent animation running.
       current = window.scrollY;
-      frame = Math.abs(current - target) < 1 ? 0 : requestAnimationFrame(step);
+      frame = Math.abs(target - current) < 1 && Math.abs(velocity) < 4
+        ? 0 : requestAnimationFrame(step);
     };
 
     window.addEventListener('wheel', e => {
       if (e.ctrlKey || e.defaultPrevented || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-      const notch = e.deltaMode !== 0 || (e.wheelDeltaY && e.wheelDeltaY % 120 === 0);
+      const wheelDelta = e.wheelDeltaY || e.wheelDelta || 0;
+      const notch = e.deltaMode !== 0 || Math.abs(wheelDelta) >= 120
+          || Math.abs(e.deltaY) >= 24;
       if (!notch || innerScroller(e.target, e.deltaY)) return;
       e.preventDefault();
-      if (!frame) { target = current = window.scrollY; last = 0; }
+      if (!frame) { target = current = window.scrollY; velocity = 0; last = 0; }
       const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? window.innerHeight : 1;
-      target = Math.max(0, Math.min(root.scrollHeight - window.innerHeight, target + e.deltaY * unit));
+      target = Math.max(0, Math.min(root.scrollHeight - window.innerHeight, target + e.deltaY * unit * 1.6));
       if (!frame) frame = requestAnimationFrame(step);
     }, {passive: false});
   }

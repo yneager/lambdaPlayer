@@ -9,6 +9,7 @@
 #include <QNetworkDiskCache>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QUrl>
 
 namespace stremio {
@@ -171,13 +172,20 @@ QNetworkReply *AddonClient::fetchResource(const ResourceRequest &request, QObjec
 
     QNetworkReply *reply = get(url, force, 0);
     const bool legacyTransport = transportKind(request.base) == TransportKind::Legacy;
-    connect(reply, &QNetworkReply::finished, context ? context : this, [this, reply, request, callback, key, legacyTransport] {
+    QPointer<QObject> guard(context);
+    connect(reply, &QNetworkReply::finished, context ? context : this, [this, reply, request, callback, key, legacyTransport, force, guard] {
         reply->deleteLater();
         ResourceResult result;
         result.request = request;
         result.error = replyError(reply, false);
         if (!result.error.isError()) {
             const auto json = parseJsonBody(reply->readAll(), result.error);
+            if (!json && !force && evictUnreadableCacheEntry(reply)) {
+                // A damaged disk-cache entry would otherwise be served until it
+                // expires (max-age is often a day): fetch it again once.
+                fetchResource(request, guard, callback, true);
+                return;
+            }
             if (json) {
                 QString parseError;
                 result.response = legacyTransport
@@ -203,13 +211,18 @@ QNetworkReply *AddonClient::fetchManifest(const QString &transportUrl, QObject *
 {
     QNetworkReply *reply = get(manifestUrl(transportUrl), force, 0);
     const bool legacyTransport = transportKind(transportUrl) == TransportKind::Legacy;
-    connect(reply, &QNetworkReply::finished, context ? context : this, [reply, transportUrl, callback, legacyTransport] {
+    QPointer<QObject> guard(context);
+    connect(reply, &QNetworkReply::finished, context ? context : this, [this, reply, transportUrl, callback, legacyTransport, force, guard] {
         reply->deleteLater();
         ManifestResult result;
         result.transportUrl = transportUrl;
         result.error = replyError(reply, false);
         if (!result.error.isError()) {
             const auto json = parseJsonBody(reply->readAll(), result.error);
+            if (!json && !force && evictUnreadableCacheEntry(reply)) {
+                fetchManifest(transportUrl, guard, callback, true);
+                return;
+            }
             if (json) {
                 QString parseError;
                 result.manifest = legacyTransport ? legacy::parseManifestResponse(*json, &parseError)
@@ -248,6 +261,12 @@ QNetworkReply *AddonClient::fetchJson(const QString &url, QObject *context,
         callback(result);
     });
     return reply;
+}
+
+bool AddonClient::evictUnreadableCacheEntry(QNetworkReply *reply)
+{
+    if (!reply->attribute(QNetworkRequest::SourceIsFromCacheAttribute).toBool() || !network_->cache()) return false;
+    return network_->cache()->remove(reply->url());
 }
 
 void AddonClient::clearMemoryCache()

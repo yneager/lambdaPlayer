@@ -1,54 +1,198 @@
 # Universal post-render FRC experiment
 
-Status: experimental, uncommitted, local Windows validation only. The working AMD AMF backend remains available on `codex/amf-frc-baseline` at `df10dff`; this work is on `codex/universal-frc`.
+Status: experimental, uncommitted, local Windows validation on one GPU (AMD Radeon RX 9070 XT). The AMD AMF backend is unchanged and remains the known-good comparison (`codex/amf-frc-baseline` at `df10dff`); this work is on `codex/universal-frc`.
 
-## Integration and ownership
+## Result in one paragraph
 
-The common interface is `src/frc/frameinterpolator.h`. It passes a D3D11 texture plus an owning reference, and returns the same texture/owner shape with a fractional source-frame content coordinate. `AmfFrcInterpolator` implements the interface while retaining AMF surface ownership and existing timestamps. `GenericD3D11Fruc` uses its own D3D11 textures. `ScreenInterpolationController` still owns capture, WGL interop, the output ring, presentation timing, and audio-delay compensation; Chromium remains outside the captured/interpolated picture.
+The hand-built block matcher was replaced as the default motion estimator of the Generic D3D11 backend by **RIFE v4.26 run natively in D3D11 compute** on a reduced "analysis" copy of each frame pair. RIFE's flow and fusion mask are upsampled to output size and the **original full-resolution frames** are warped and blended — RIFE v4's own final synthesis step, done at output resolution. The displayed/output resolution is never reduced. The D3D11 executor reproduces the reference VapourSynth-RIFE ncnn/Vulkan plugin output to 52–54 dB PSNR. On native 4K frames it beats the old block matcher by ~3.2 dB mean PSNR (the block matcher was worse than a plain crossfade on every test set), matches AMF on slow content, and is visibly cleaner than AMF and the block matcher on fast occlusion and static subtitles. In-app, 4K (3840x2372 capture) 24→48 fps runs at 48.0 presented/s with ~23 ms GPU per source pair at 720p analysis; 24→60 fps holds ~60/s; 120/200 fps are not sustainable at 4K on this GPU and fall back through the existing watchdog.
 
-mpv renders through its existing OpenGL render API into a D3D11 BGRA8 input texture registered with `WGL_NV_DX_interop2`. The controller's source-resolution capture on the test's 1360x840 widget became 3840x2372 because the render surface includes the letterbox area needed to preserve a 16:9 image in the widget's aspect ratio. The video content itself is 3840x2160. This is GPU-only after mpv rendering; no CPU pixel readback is used. Interop is runtime-probed and remains a dependency on every vendor.
+## Architecture
 
-## Generic compute prototype
-
-The backend independently implements sparse block matching and bidirectional warping using D3D11 compute shaders; it does not copy VipleStream, HopperRender, or MPC Video Renderer source. Current parameters are 32x32-pixel motion cells, a 24-pixel search radius with 4-pixel displacement steps, and 16 luma samples per candidate block. It calculates forward and backward vector fields once for each source pair, then reuses them to render exact requested output timestamps. The 60/120/200 fps options use one source-pair motion calculation and multiple full-resolution warp dispatches as needed. Source frames that land on the requested output grid are copied through a channel-order conversion shader.
-
-This is a prototype-quality block matcher, not an adoption of a complete production implementation. It has no vector confidence cleanup, edge-aware smoothing, occlusion/disocclusion resolution, or scene-cut detection yet. Those omissions can produce ghosting, block boundaries, or incorrect motion on crossings and scene changes. The output is RGBA8, matching the normal widget's 8-bit path; it does not preserve an HDR/10-bit pipeline that the widget does not currently provide.
-
-The 4K GPU duration uses a non-blocking D3D11 timestamp-query ring around motion estimation, all output warps and the controller's output-slot copies. `genericCpuSubmitMs` is CPU time spent submitting that work. Neither value is a GPU utilization percentage. This measurement is not available for the AMF backend.
-
-## D3D11 VideoProcessor capability probe
-
-Startup probes a 3840x2160 progressive 24-to-48 fps enumerator, checks BGRA8 input/output support, reads all rate-conversion groups, looks for `D3D11_VIDEO_PROCESSOR_PROCESSOR_CAPS_FRAME_RATE_CONVERSION`, creates a matching processor, and configures its stream with `RepeatFrame=FALSE`. Microsoft documents that this flag represents interpolation and that `RepeatFrame=FALSE` requests interpolation rather than repetition ([processor caps](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ne-d3d11-d3d11_video_processor_processor_caps), [output-rate method](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11videocontext-videoprocessorsetstreamoutputrate)). The probe deliberately does not expose a selectable backend: it has not submitted real surfaces through `VideoProcessorBlt` or checked output quality.
-
-On the tested RX 9070 XT driver, one rate-conversion mode advertised interpolation, both BGRA directions were supported, a processor was created, and generated-rate setup succeeded. The advertised mode reported zero past and zero future reference frames. Microsoft describes those counts as the reference frames needed for optimal processing ([rate-conversion caps](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/ns-d3d11-d3d11_video_processor_rate_conversion_caps)). This is a promising capability result, not proof of useful hardware FRC output.
-
-## Local benchmark
-
-Command used for each rate:
-
-```powershell
-.\_local\tools\frctest.ps1 -Clip "$PWD\_local\testmedia\4k30s.mkv" -Seconds 12 -InputMode source -Option "<rate> fps (Universal D3D11)"
+```
+mpv render (unchanged) -> D3D11 BGRA capture texture, full size (e.g. 3840x2372)
+   |                                   |
+   | prepare (area filter, GPU)        |  original A/B textures stay full size
+   v                                   |
+analysis tensors A', B' (e.g. 1166x720, zero padded to 64)
+   | RIFE v4.26 flownet, D3D11 compute, once per requested t
+   v                                   |
+flow A->t, flow B->t, mask (analysis size)
+   | packMotion -> float textures      |
+   v                                   v
+synthesize (output size): out = warp(A, up(flowA) * scale) * up(mask)
+                               + warp(B, up(flowB) * scale) * (1 - up(mask))
+   v
+RGBA8 output -> existing controller output ring / presenter / audio delay
 ```
 
-The test file is a local synthetic 3840x2160 clip, not the user's Game of Thrones episode or Comet stream. The local machine reports AMD Radeon RX 9070 XT; 4K capture size was 3840x2372. Approximate last active per-second samples:
+* Flow vectors are rescaled from analysis to output pixels (`size / analysisSize` per axis), not only resampled.
+* RIFE v4's flow depends on the timestep, so one inference runs **per requested output time** (1 per pair at 2x, 1.5 average at 24→60). Nothing is linearly reused across t.
+* RIFE v4.x has no refinement U-Net: its final output *is* `warp(img0)·mask + warp(img1)·(1−mask)` (verified from the graph tail). The only approximation versus native RIFE is that flow/mask come from the analysis size. Running the flownet at the native 2104-line size did not improve the large-motion failure case (below), and 540→1080 analysis changed mean PSNR by only ~0.3 dB.
+* Scene cuts: mean absolute luma difference of the analysis frames (GPU reduction, no readback) above 0.1 (the threshold `rife.vpy` uses with `misc.SCDetect`) shows the nearer source frame instead of blending (`LAMBDA_RIFE_SCENE_THRESHOLD`, ≤0 disables).
+* All work is on the one D3D11 device that already owns the captured frames: no Vulkan/D3D12 interop, no CPU staging, no new runtime dependency.
 
-| Output target | Generic outputs/s | Presented/s | Generic GPU time per source pair | CPU submission | Pipeline latency | Presentation issues |
-|---:|---:|---:|---:|---:|---:|---|
-| 48 fps (2x) | 48 | 47–48 | 9.4 ms | below 0.1 ms before arbitrary-time path; later about 0.1 ms | 26–28 ms | 5–12 skipped/late events across the run |
-| 60 fps | 60 | 60 | about 10.1 ms | 0.1–0.3 ms | about 39 ms | 3 dropped presentations in the run |
-| 120 fps | 119–122 | about 120 | 10.6 ms | 0.18–0.24 ms | about 38 ms | 2 dropped presentations; timer lateness p95 about 6.7 ms |
-| 200 fps | about 200 | about 176 | 11.3 ms | 0.27–0.31 ms | about 45 ms | 279 dropped presentations; timer lateness p95 about 7.6 ms; paint p95 about 11.5 ms |
+### Files
 
-The 60 and 120 targets were presented at their targets in the observed samples. At 200 fps the worker generated the requested rate, but the GUI presentation path did not keep up. The 240 Hz monitor is available, but the 5 ms target tick is shorter than measured p95 paint/timer latency at that mode. The presenter's existing schedule/drop behavior was retained. Do not describe 200 fps as a successful presentation result.
+| File | Role |
+|---|---|
+| `src/frc/rifed3d11.{h,cpp}` | ncnn param/bin loader (fp16/fp32 weights), shape inference, dead-layer pruning, ResConv fusion (`leaky(conv·β + x)` in one pass), liveness-based buffer reuse, pre-baked immutable per-dispatch constants. Supports exactly the layer set of the RIFE v4 flownets (Convolution 3x3 s1/2, Deconvolution, Interp bilinear, BinaryOp, Eltwise, Crop (channel), Concat, PixelShuffle, ReLU, Sigmoid, Split, MemoryData, rife.Warp); anything else is refused with a reason. |
+| `resources/frc/rife_ops.hlsl` | Layer kernels. `conv3x3` (16x8 tile, 16 outputs/thread, groupshared input tile + float4 weights), `deconv4x4s2` (2x2 output quad per input cell; 8x faster than the generic transposed-conv kernel), bilinear interp with ncnn/PyTorch `align_corners=False` coefficients, warp with border clamp/`align_corners=True`. |
+| `resources/frc/rife_io.hlsl` | `prepare`, `sceneDiff`, `packMotion`, `synthesize`. |
+| `src/frc/genericd3d11fruc.{h,cpp}` | Backend: `Motion::Rife` (default) or `Motion::Block` (`LAMBDA_GENERIC_FRC_MOTION=block`, old matcher kept only for A/B). |
+| `src/frc/computeshaders.{h,cpp}`, `CMakeLists.txt` | Kernels are compiled by `fxc` at build time and embedded as `:/frc/cso/*.cso`. Runtime `D3DCompile` is a cached fallback only: the RIFE conv/deconv kernels take ~23 s to compile, which previously blocked every (re)configuration. |
+| `tools/frc-bench/main.cpp` (`frc_bench`, not deployed) | `validate`, `interp`, `profile`, `synth`, `grid`, `tof32`. |
+| `src/frc/screeninterpolationcontroller.cpp` | Only diagnostics (`genericMotion`, `rifeModel`, `rifeAnalysisWidth/Height`) and a backend-neutral failure message. Capture, ring, presenter and audio compensation unchanged. |
 
-The same clip through the preserved AMD AMF mode produced about 48 presented fps, with about 76 ms pipeline latency and about 66–67 ms p95 intended-to-available time. Generic at 48 fps measured about 26–28 ms pipeline latency and about 22 ms p95 intended-to-available time. This is a local timing comparison only; output quality was not scored and the streams were not pixel-compared.
+### Configuration
 
-The measured Generic compute occupies roughly 9–11 ms of GPU execution per 24 fps source interval on this one adapter. It is clear evidence of GPU execution, but not a readout of total GPU utilization or proof that all available GPU throughput is used. The 4K60 difficulty is the amount of work, timing, and presentation deadline: the prototype processes roughly 9.1 million pixels per source frame pair (including the scaled letterbox area), searches candidate motion on the GPU, then warps every output pixel; each 60 fps presentation has a 16.7 ms period. More CPU cores cannot parallelize the GPU dispatches automatically, and the measured CPU submission portion is small compared with the GPU work.
+| Variable | Default | Meaning |
+|---|---|---|
+| `LAMBDA_RIFE_ANALYSIS_HEIGHT` | 720 at ordinary rates; 540 for more than 2× output or 4K ≥60 fps | flownet input height (clamped to the capture height); output always stays at capture resolution |
+| `LAMBDA_RIFE_MODEL` | first of `rife-v4.26_ensembleFalse`, `rife-v4.25-lite_ensembleFalse` in `rife/models` | model directory name or absolute path |
+| `LAMBDA_GENERIC_FRC_MOTION` | RIFE | `block` selects the old block matcher |
+| `LAMBDA_RIFE_SCENE_THRESHOLD` | 0.1 | scene-cut threshold, ≤0 disables |
+| `LAMBDA_RIFE_FLUSH_DISPATCHES` | 0 | Flush every N dispatches (experiment; no measured benefit) |
 
-## Compatibility, licensing, and remaining work
+RIFE v4.6 (shipped for the VapourSynth path) is **not** selected automatically: it doubled a static subtitle in the synthetic test. Without a v4.26/v4.25-lite model the Generic option is disabled with the reason "No RIFE v4 model found". `.github/scripts/assemble-rife-runtime.ps1` now adds `rife-v4.26_ensembleFalse` from the same pinned plugin commit (`c3ec6aab…`), SHA-256 verified; the local files in `_local/testmodel` were verified byte-identical to that commit.
 
-Only one adapter/driver combination (RX 9070 XT) has been tested. D3D11 feature level 11 compute is widely available on AMD/NVIDIA/Intel, but LAMBDA's OpenGL-to-D3D texture sharing also needs a suitable WGL interop extension from the active GL driver. No NVIDIA or Intel runtime test has been done.
+## Test-setup repair (the invalid `generic-640` run)
 
-The checkout has no root `LICENSE`/`COPYING` file. VipleStream declares GPL-3.0, HopperRender declares GPL-3.0, the related mpv interpolator declares GPL-2.0/LGPL-2.1, and MPC Video Renderer declares GPL-3.0. They were studied as references only; their source and shader text were not copied. The generic technique was implemented independently. Existing AMD AMF files retain their vendor MIT notices. Do a project-wide license review before distribution.
+`_local/grab/generic-640.json` reported a 100x30 video area and a 7200x2160 FRC input. 100x30 is Qt's default size for a widget never given geometry: the native video widget is positioned only from `reportVideoRect()` in `player.js`, which runs from `requestAnimationFrame`. Chromium suspends rAF for occluded/background pages, so a benchmark window launched behind other windows never reported its rectangle. The 7200x2160 input then follows mechanically from `inputSizeFor` in source mode: k = max(3840/100, 2160/30) = 72 → 7200x2160. The same launch on an unobstructed window gives 1360x840 / 3840x2372.
 
-Still required before recommending a universal default: visually score representative pans, text/subtitles, occlusion, scene cuts and thin lines; run the actual Comet episode; validate arbitrary timestamps at variable frame rates; improve motion cleanup/fallback; test the VideoProcessor with actual input/output views and measure its quality/latency; test NVIDIA and Intel; collect GPU-engine utilization/VRAM counters; and determine whether the 200 fps presenter can be paced without missing ticks. Current build command: ` .\build.ps1 -NoRun ` (remove surrounding spaces in the shell). Build passed after the current implementation changes.
+The production pipeline was not changed. The local harness `_local/tools/frctest.ps1` now:
+
+1. starts the app with `--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling`;
+2. calls `lambdaUi.reportVideoRect()` through CDP (no rAF dependency) and reads the `.player` rectangle and DPR back;
+3. **fails with exit code 2** unless the widget equals the page rectangle × DPR, the area is at least `-MinVideo` (default 1280x720), and the FRC input equals the widget size or, with `-InputMode source`, exactly the size that holds the decoded video at native pixels. Verified negative case: `-MinVideo 3000x2000` → `PREFLIGHT FAILED: video area 1360x840 is below 3000x2000`.
+
+Every in-app number below comes from runs that passed this preflight.
+
+## Correctness of the D3D11 RIFE executor
+
+Same inputs (two real frames, 960x540, raw float RGB) through `frc_bench validate` and `_local/tools/rife-reference.py` (the pinned VapourSynth-RIFE-ncnn-Vulkan plugin, which stores activations as fp16):
+
+| Model | PSNR D3D11 vs plugin | max abs diff | (A vs B, for scale) |
+|---|---:|---:|---:|
+| rife-v4.6 | 54.00 dB | 0.031 | 32.99 dB |
+| rife-v4.25-lite | 52.64 dB | 0.127 | |
+| rife-v4.26 | 54.13 dB | 0.0037 | |
+
+Re-checked after each kernel optimisation (still 54.13 dB).
+
+## Quality at native resolution
+
+All scores: `frc_bench interp` through the real `FrameInterpolator` backends at 3840x2160 (synthetic: 3640x2104), t = 0.5, PSNR against the true middle frame. AMF is given two history frames (`--pre`), without which it returns frame A.
+
+Real frames (`_local/testmedia/4k30s.mkv`, frames s+4 / s+6 → truth s+5; a slow camera move on detailed foliage):
+
+| Case | set 96 | 300 | 460 | 620 | mean |
+|---|---:|---:|---:|---:|---:|
+| plain blend | 42.64 | 37.80 | 38.45 | 40.97 | 39.97 |
+| **old block matcher** | 41.18 | 37.34 | 37.32 | 39.59 | **38.86** |
+| AMD AMF | 45.54 | 40.66 | 40.18 | 42.56 | 42.24 |
+| RIFE 4.26 @540 | 45.53 | 40.17 | 39.86 | 41.80 | 41.84 |
+| **RIFE 4.26 @720 (default)** | 45.78 | 40.19 | 40.03 | 42.21 | **42.05** |
+| RIFE 4.26 @1080 | 45.88 | 40.21 | 40.04 | 42.42 | 42.14 |
+| RIFE 4.26 @2160 (set 96) | 45.91 | | | | |
+| RIFE 4.25-lite @720 | 44.88 | 39.94 | 39.85 | 41.41 | 41.52 |
+| RIFE 4.6 @720 | 46.21 | 40.79 | 40.22 | 43.10 | 42.58 |
+
+Synthetic known motion (`frc_bench synth`, `_local/tools/frc-synth.ps1`): background pans 48x12 px per source interval, a dark card with 12 thin white lines and text moves 291 px per interval (occlusion + disocclusion), a thin red line, and (second run) a static burned-in subtitle:
+
+| Case | pan + card | + static subtitle |
+|---|---:|---:|
+| plain blend | 20.70 | 20.71 |
+| old block matcher | 20.41 | 20.42 |
+| AMD AMF | 26.07 | 26.00 |
+| RIFE 4.26 @540 / @720 / @1080 | 25.22 / 25.04 / 25.46 | 24.85 / 24.85 / 25.36 |
+| RIFE 4.26 @2104 (native analysis) | 25.73 | |
+| RIFE 4.6 @720 / @1080 | 25.91 / 25.72 | 22.49 / 23.26 |
+| RIFE 4.25-lite @720 | 25.90 | 25.23 |
+
+Visual review (`frc_bench grid`, crops under `_local/frcout/…/grid-*.png`):
+
+* **Old block matcher**: rectangular ghost blocks around every moving edge, doubled text, doubled roots on the slow real footage. Confirms the owner's report; it is worse than a crossfade.
+* **AMF**: clean on slow footage and on the static subtitle; on the fast card it produces blocky tearing and smeared background on both edges and breaks the moving text into blocks.
+* **RIFE 4.26**: card edges and the revealed background are clean; thin lines on the card wobble slightly; the fast-moving card text is bent and partially doubled; the card's lower corner is rounded into the background. Static subtitle stays clean.
+* **RIFE 4.6**: better PSNR on the slow real footage, but the card's thin lines braid across each other and the static subtitle is visibly doubled ("Sttatic subttitle") — the reason it is not the default.
+* The fast-text failure is **not** caused by the reduced analysis size: native-size analysis produced the same kind of distortion (25.73 dB, visually no better). It is the model's limit at ~145 px displacement per half interval.
+
+## Performance (RX 9070 XT, driver 32.0.31041.1004 per earlier notes)
+
+Network only, `frc_bench profile`, synchronous GPU timestamps, warm clocks:
+
+| Tensor | v4.26 | v4.6 |
+|---|---:|---:|
+| 960x576 | 9.0 ms | 10.1 ms |
+| 1280x768 | 13.5 ms | 14.9 ms |
+| 1920x1088 | 26.3 ms | 32.6 ms |
+
+At 960x576, conv3x3 is ~6.6 ms of 56 dispatches (the small late blocks are latency-bound: vectorising the weight reads gained only ~4%), concat copies 0.85 ms, deconv 0.87 ms (was 7.1 ms with the generic transposed-conv kernel). Prepare + scene metric + pack + synthesize at 4K: ~0.3 ms total. Arena memory: 179 MB for v4.26 at 960x576 (buffers are reused by lifetime).
+
+In app (`_local/tools/frcrun.ps1` / `frctest.ps1`, `4k30s.mkv`, windowed 1360x840, `-InputMode source` → capture 3840x2372, analysis 1166x720, per-second samples after warm-up). `gpu` is the D3D11 timestamp span of one source pair's work including the controller's output-slot copies, **not** GPU utilisation:
+
+| Target | captures/s | generated/s | presented/s | late | dropped presentations | GPU per pair | CPU submit | latency (= audio delay) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 48 (2x) | 24.0 | 24.0 | 47–49 | 0 | 3 in ~12 s | 22–23 ms | 0.4 ms | 26–27 ms |
+| 60 | 24.0 | 48.0 | 57–62 | 0 | 9–11 in ~10 s | 27–34 ms | | 65–67 ms |
+| 120 | — | — | ~30 | | watchdog disabled FRC | 36 ms (540p analysis) | | |
+
+Lifecycle (`_local/tools/frclifecycle.ps1`, fullscreen 2560x1440, capture 3840x2160): playing 47.9/s, paused 0 (mpv draws), resumed 48.0/s, seek to 70% and 20% back to 47.4–48.0/s, A/V sync within ±6 ms throughout, turning FRC off restored `audio-delay` to 0.
+
+**120/200 fps at 4K**: generation keeps up at 540p analysis (118.7 outputs/s, 36 ms per 41.7 ms source interval) but presentation falls to ~30/s: the GUI thread's `wglDXLockObjectsNV` in `paint()` waits for all queued D3D11 work on the device (paint P95 ≈ 37 ms ≈ one full RIFE batch). Splitting RIFE submissions with periodic `Flush()` did not shorten that wait. The existing watchdog turns FRC off and playback continues at the source rate. Fixing this needs a presentation path that does not serialise behind the compute queue (separate D3D11 device/queue or a different present path) — not attempted.
+
+## Heavy 4K follow-up: presentation pipeline fixes
+
+The owner reported that performance was still bad on a real 4K movie. The local test clips were very low bitrate (2.8-8.5 MB), so a movie-like file was generated with the shipped libmpv (`_local/tools/encode-heavy.py`): the 4K clip plus temporal grain, 10-bit HEVC at ~90 Mbit/s (hevc_amf), tagged BT.2020/PQ so mpv tone-maps. On it, fullscreen 2560x1440 with default settings, **every** FRC backend presented only 30-41 of 48 frames/s, AMF included, while generation kept up. Measurements (`_local/tools/frcrun.ps1`, `gpu-engines.ps1`):
+
+* not CPU (process 64% of one core on 28 threads), not GPU throughput (3D engine ~10%, decode engine 32%), not the decoder (software decode behaved the same), not HDR tone mapping (the SDR encode behaved the same);
+* capture instants jittered 14-18 ms (P95) around the 41.7 ms source grid with the high-bitrate decode;
+* every rejected frame was "mapped to an already presented tick": the presenter derived ticks by rounding arrival-based wall times and phase-locked its clock to the frames it showed, so late frames dragged the clock and cascaded;
+* with RIFE, the GUI thread's `paint()` waited behind the whole inference batch on the shared D3D11 device (paint P95 23-34 ms).
+
+Changes (all backends benefit; production behaviour otherwise unchanged):
+
+1. **Phase-locked capture grid** (`captureFrame`): intended source times follow a grid that absorbs capture jitter (gain 0.05, whole-interval steps for skipped frames, re-anchor on larger disturbances).
+2. **Deterministic presenter** (`onOutput`/`presentDue`): tick = (content - origin) / content-per-tick, with content-per-tick frozen from the configured backend grid; the tick clock follows the grid + latency, never arrival times; a due frame is shown at the next wake-up unless a newer one was shown.
+3. **Separate compute device for the Generic backend** (`GenericD3D11Fruc`): RIFE runs on its own D3D11 device on the same adapter; captures and outputs cross devices through NT-handle shared textures ordered by D3D11.4 shared fences; the worker CPU-waits for finished outputs before the controller's small slot copy on the interop device, so the OpenGL present never queues behind inference. Falls back to one device if fences/sharing are unavailable (`LAMBDA_GENERIC_FRC_SEPARATE_DEVICE=0` forces it). Bench output is identical (40.19 dB on set 300 either way).
+4. `LAMBDA_MPV_OPTIONS` developer hook and new diagnostics (`workerMs`, `captureJitterP95Ms`, late-reason counters, `genericSeparateComputeDevice`).
+
+Heavy 4K HDR file, fullscreen 2560x1440, 24 fps source:
+
+| Mode | before | after | late | dropped | paint P95 |
+|---|---|---|---:|---:|---:|
+| RIFE 2x (48) | 29-41/s | 48.0-49.1/s | 0 | 1 | 14 ms |
+| RIFE 60 | 49-60/s, drops growing | 59.7-60.2/s | 0 | 5 | 14 ms |
+| AMF 2x | 30-39/s | 48.0/s | 0 | 0 | 2 ms |
+| AMF 60 | - | 59.4-60.6/s | (finer-grid frames only) | 1 | 7 ms |
+| RIFE 120 | fallback | fallback at 720p analysis (56 ms per pair); 93-98/s at 540p | | | |
+
+Lifecycle on the heavy file (RIFE 2x): play 47.5/s, pause, resume 47.6/s, seek 70% 47.9/s, seek 20% 46.8/s, A/V sync within 3 ms, off restores `audio-delay` 0. Light clip windowed: 48.0/s, 0 late.
+
+## Reproduction
+
+```powershell
+.\build.ps1 -NoRun                                   # app + frc_bench; fxc precompiles the kernels
+Copy-Item _local\build\frc_bench.exe _local\app\      # bench uses the app's Qt DLLs
+python _local\tools\extract-frames.py _local\testmedia\4k30s.mkv _local\frames\4k30s 96 7   # libmpv, native PNG
+.\_local\tools\frc-quality.ps1                         # real-frame table
+.\_local\tools\frc-synth.ps1 -Dx 48 -Dy 12 -Name sub48 # synthetic table
+_local\app\frc_bench.exe profile <model dir> 960 576   # per-layer GPU profile
+_local\app\frc_bench.exe validate <model dir> 960 540 a.f32 b.f32 out.f32   # vs tools\rife-reference.py
+.\_local\tools\frcrun.ps1 -Option "fps (Universal D3D11)"          # in-app, preflighted
+.\_local\tools\frclifecycle.ps1 -Option "fps (Universal D3D11)"
+```
+
+`ctest --test-dir _local\build --timeout 120`: 8/8 suites passed (no hang this time).
+
+## Licensing
+
+RIFE weights: MIT (hzwer / Megvii, Practical-RIFE). ncnn model conversions: from styler00dollar/VapourSynth-RIFE-ncnn-Vulkan at the already-pinned commit, MIT. The D3D11 executor and shaders are LAMBDA code written against ncnn's layer semantics; no ncnn, rife-ncnn-vulkan, VipleStream, HopperRender (GPL) or MPC-VR code was copied. `THIRD_PARTY_NOTICES.md` lists the new model. The checkout still has no root license; a project-wide review is still required before distribution.
+
+## Not done / open
+
+* The user's actual Comet stream (Game of Thrones S1E1, 4K) was not available in this workspace; all real-footage tests use the local `4k30s.mkv` (slow camera motion) plus synthetic fast motion. Dark scenes and real cuts were not measured (the scene-cut path is implemented but untested on real content).
+* Only the RX 9070 XT was tested. The executor needs D3D11 feature level 11.0 compute and ~200–700 MB of buffers depending on analysis size; NVIDIA/Intel are untested, and the OpenGL/D3D11 interop dependency is unchanged.
+* Remaining failure modes: fast-moving text/fine repeated structure (RIFE itself), and RIFE at 120/200 fps at 4K (compute-bound on this GPU; the watchdog falls back).
+* Conv kernels are straightforward fp32 compute; fp16 arithmetic or wave-level optimisations could cut the ~9–14 ms network time further.
+* D3D11 VideoProcessor FRC is still only capability-probed; ONNX Runtime/DirectML and IFRNet were not pursued because the native executor met the 2x/60 fps budget without new runtime dependencies or cross-API sharing.

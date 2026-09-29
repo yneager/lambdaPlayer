@@ -50,6 +50,10 @@ html.is-maximized .nav-shell{padding-top:14px}
 .hero-grid,.star-field{animation:none}
 .hero.is-offscreen *,.hero.is-offscreen::before,.hero.is-offscreen *::before,.hero.is-offscreen *::after{animation-play-state:paused!important}
 
+/* The fixed SVG turbulence blend crosses the whole viewport on every scroll
+   frame. Keep the glossy gradients and drop this full-screen compositing pass. */
+.page-noise{display:none}
+
 /* Home at small window sizes (desktop window, not phone). */
 @media(max-width:900px){.nav{gap:18px}.nav-links{gap:16px}}
 @media(max-width:760px){.nav-links a:nth-child(3),.nav-links a:nth-child(4){display:none}}

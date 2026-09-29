@@ -1,10 +1,16 @@
 # LAMBDA Player
 
-**Current version: v0.2.5**
+**Current version: v0.2.6**
 
 LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. It is also a Stremio add-on client: installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player.
 
 ## Version History
+
+### v0.2.6 — UI and interpolation improvements
+
+- Glossy UI motion, a λ launch animation, smoother card transitions and more responsive mouse-wheel scrolling.
+- Universal D3D11 frame interpolation now uses RIFE motion analysis on a smaller copy of 4K video while synthesizing full-resolution output. High-rate 4K playback uses a faster analysis size.
+- Frame-generation scheduling and a separate compute device reduce presentation stalls on supported hardware. The AMD AMF and existing VapourSynth/RIFE options remain available.
 
 ### v0.2.5 — Stremio add-ons
 

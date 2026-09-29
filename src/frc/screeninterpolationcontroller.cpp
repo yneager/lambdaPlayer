@@ -11,6 +11,7 @@
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
 #include <QScreen>
+#include <QScopeGuard>
 
 #include <windows.h>
 #include <d3d11.h>
@@ -28,6 +29,7 @@ constexpr int kCaptureRing = 256;
 constexpr int kMaxPendingFrames = 4;     // frames queued for the worker
 constexpr int kResizeSettleMs = 300;
 constexpr qint64 kMs = 1000000;
+constexpr double kGridPhaseGain = 0.05; // capture-time correction per source frame
 
 amf_int64 envInt(const char *name, amf_int64 fallback)
 {
@@ -315,6 +317,7 @@ void ScreenInterpolationController::resetTimeline()
     shownSlot_ = -1;
     lastInput_ = {};
     lastCaptureNs_ = 0;
+    gridNs_ = 0;
     epochValid_ = false;
     shownContent_ = -1.0;
     // Latency is re-measured from fresh samples (seek/pause outliers).
@@ -507,6 +510,9 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
         job.stages = stages;
         job.sourceFps = 1e9 / sourceIntervalNs();
         job.outputFps = outputRate();
+        // Output ticks in content units, fixed with the backend's grid (the
+        // measured source interval keeps moving when container fps is unknown).
+        pendingContentPerTick_ = job.sourceFps / job.outputFps;
         job.generation = generation_;
         post(std::move(job));
         return false;
@@ -518,6 +524,7 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
         if (jobs_.size() >= size_t(kMaxPendingFrames)) {
             // The worker cannot keep up: the watchdog decides, keep playing.
             ++counters_.late;
+            ++counters_.lateQueueFull;
             return false;
         }
     }
@@ -553,7 +560,25 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
     }
     lastCaptureNs_ = now;
     ++seq_;
-    captureTimes_[size_t(seq_ % kCaptureRing)] = now;
+    // mpv shows source frames on a steady grid, but the moment LAMBDA captures
+    // each one jitters with decode and GUI load (bursty on high-bitrate 4K).
+    // Presenting from raw capture instants turned that jitter into tick
+    // collisions and "late" drops, so intended times follow a phase-locked
+    // grid; skipped source frames advance it by whole intervals and a larger
+    // disturbance (seek, stall) re-anchors it.
+    qint64 intended = now;
+    if (gridNs_ > 0) {
+        const double interval = sourceIntervalNs();
+        const double steps = std::max(1.0, std::round(double(now - gridNs_) / interval));
+        const qint64 predicted = gridNs_ + qint64(steps * interval);
+        const qint64 error = now - predicted;
+        if (steps <= 4.0 && std::llabs(error) < qint64(interval * 0.75)) {
+            intended = predicted + qint64(double(error) * kGridPhaseGain);
+        }
+    }
+    pushSample(captureJitterMs_, double(std::llabs(now - intended)) / kMs);
+    gridNs_ = intended;
+    captureTimes_[size_t(seq_ % kCaptureRing)] = intended;
     ++counters_.captures;
     if (shownSlot_ < 0 && queue_.empty()) {
         lastInput_ = surface; // until FRC output arrives (start, seek, resume)
@@ -675,6 +700,7 @@ void ScreenInterpolationController::workerLoop()
 
         QString error;
         FrameInterpolator *backend = activeInterpolator();
+        const qint64 workStart = clock_.nsecsElapsed();
         const bool ok = backend && backend->processFrame(job.surface, double(job.seq), [&](const InterpolatedFrame &output) {
             ++outputs_;
             if (output.content != std::floor(output.content)) ++generated_;
@@ -702,11 +728,15 @@ void ScreenInterpolationController::workerLoop()
                 onOutput(slotIndex, content, readyNs, g);
             }, Qt::QueuedConnection);
         }, &error);
+        const double workMs = double(clock_.nsecsElapsed() - workStart) / kMs;
+        workerMs_.store(workMs);
+        if (workMs > workerMaxMs_.load()) workerMaxMs_.store(workMs);
         ++submitted_;
         lastSubmitStatus_ = backend ? backend->lastSubmitStatus() : 0;
         lastQueryStatus_ = backend ? backend->lastQueryStatus() : 0;
         if (!ok) {
-            QMetaObject::invokeMethod(this, [this, error] { fail(QStringLiteral("AMD FRC stopped: ") + error); },
+            const QString name = backend ? backend->name() : QStringLiteral("Frame interpolation");
+            QMetaObject::invokeMethod(this, [this, name, error] { fail(name + QStringLiteral(" stopped: ") + error); },
                                       Qt::QueuedConnection);
         }
     }
@@ -726,6 +756,7 @@ void ScreenInterpolationController::onConfigured(bool ok, const QString &error, 
     Q_UNUSED(generation);
     configuredSize_ = QSize(width, height);
     configuredStages_ = stages;
+    contentPerTick_ = pendingContentPerTick_;
     latencyNs_ = 0; // re-measured for this cascade depth
     processingSamplesMs_.clear();
     pendingSize_ = configuredSize_;
@@ -764,13 +795,30 @@ void ScreenInterpolationController::onOutput(int slot, double content, qint64 re
     ++outputsSeen_;
     lastProcessMs_ = double(readyNs - intended) / kMs;
 
-    // L = 99th percentile of (available on the GUI thread - intended time)
-    // + 3 ms, measured continuously after a warm-up. Until then: the FRC hold
-    // plus one source frame and a processing margin.
+    // L follows the 99th percentile of (available on the GUI thread -
+    // intended time) + 3 ms, measured after a warm-up; until then the FRC hold
+    // plus one source frame and a processing margin. Every change of L shifts
+    // all later presentation times and re-syncs mpv's audio (a visible hitch),
+    // so L is sticky: it rises at once with headroom when frames would be
+    // late, and falls only after staying well above need for 15 s.
     pushSample(processingSamplesMs_, double(now - intended) / kMs);
     if (outputsSeen_ > (qint64(8) << stages) && processingSamplesMs_.size() >= 24) {
         const double measured = (percentile(processingSamplesMs_, 0.99) + 3.0) * kMs;
-        if (latencyNs_ <= 0 || std::abs(measured - latencyNs_) > 2.0 * kMs) latencyNs_ = measured;
+        constexpr double kHeadroomNs = 6.0 * kMs;
+        const double previous = latencyNs_;
+        if (latencyNs_ <= 0 || measured > latencyNs_) {
+            latencyNs_ = measured + kHeadroomNs;
+            latencyLowSinceNs_ = 0;
+        } else if (measured < latencyNs_ - 20.0 * kMs) {
+            if (latencyLowSinceNs_ == 0) latencyLowSinceNs_ = now;
+            else if (now - latencyLowSinceNs_ > 15000 * kMs) {
+                latencyNs_ = measured + kHeadroomNs;
+                latencyLowSinceNs_ = 0;
+            }
+        } else {
+            latencyLowSinceNs_ = 0;
+        }
+        if (latencyNs_ != previous) ++latencyChanges_;
     }
     const double hold = settings_.useFutureFrame ? 2.0 : 1.0;
     const double latency = latencyNs_ > 0 ? latencyNs_ : (hold + 1.0) * interval + 10.0 * kMs;
@@ -783,26 +831,43 @@ void ScreenInterpolationController::onOutput(int slot, double content, qint64 re
     lastLagMs_ = latency / kMs;
     if (latencyNs_ > 0 && counters_.presented > qint64(outputRate() * 2)) applyAudioDelay(latency / 1e9); // after ~2 s
 
-    // Presentation clock at the output rate, phase-locked to content time.
+    // Presentation clock at the output rate. Output frames are evenly spaced in
+    // content (source-frame) time, so each frame's tick follows from its
+    // content alone and two frames never compete for one tick through wall
+    // clock rounding. The tick clock follows the phase-locked source grid and
+    // the measured latency - never frame arrival times, which on bursty
+    // high-bitrate 4K would drag the clock and cascade into more late frames.
     tickPeriodNs_ = 1e9 / outputRate();
+    const double contentPerTick = contentPerTick_ > 0.0 ? contentPerTick_ : tickPeriodNs_ / interval;
     if (!epochValid_) {
+        // Output contents are origin + k * step; ticks count from the origin
+        // so rounding never maps two outputs onto one tick.
         epochValid_ = true;
-        epochNs_ = p.wallNs;
-        nextTick_ = 0;
+        outputsSinceEpoch_ = 0;
+        tickOriginContent_ = content;
         lastPresentedTick_ = -1;
     }
-    p.tick = qint64(std::llround(double(p.wallNs - epochNs_) / tickPeriodNs_));
-    if (p.wallNs < now - qint64(tickPeriodNs_) || p.tick <= lastPresentedTick_ || content <= shownContent_) {
+    p.tick = qint64(std::llround((content - tickOriginContent_) / contentPerTick));
+    // The source grid is already phase-locked: the tick clock snaps to latency
+    // changes and absorbs the grid's small per-frame corrections gradually.
+    const qint64 epochTarget = p.wallNs - qint64(double(p.tick) * tickPeriodNs_);
+    const qint64 drift = epochTarget - epochNs_;
+    epochNs_ = (outputsSinceEpoch_++ == 0 || std::llabs(drift) > 2 * kMs) ? epochTarget
+                                                                           : epochNs_ + qint64(double(drift) * 0.1);
+    if (p.tick <= lastPresentedTick_ || content <= shownContent_) {
         ++counters_.late;
+        if (p.tick <= lastPresentedTick_) ++counters_.lateTick;
+        else ++counters_.lateContent;
         freeSlot(slot);
         return;
     }
-    // One frame per tick: keep the one closest to the tick time.
+    // Grids finer than the target (AMF cascades): keep the content nearest
+    // to the tick.
     for (auto it = queue_.begin(); it != queue_.end(); ++it) {
         if (it->tick != p.tick) continue;
-        const qint64 t = tickTime(p.tick);
         ++counters_.skipped;
-        if (std::llabs(it->wallNs - t) <= std::llabs(p.wallNs - t)) {
+        const double target = double(p.tick) * contentPerTick;
+        if (std::abs(it->content - target) <= std::abs(content - target)) {
             freeSlot(slot);
             return;
         }
@@ -818,31 +883,30 @@ void ScreenInterpolationController::onOutput(int slot, double content, qint64 re
 
 void ScreenInterpolationController::schedule()
 {
-    if (!epochValid_) {
+    if (!epochValid_ || queue_.empty()) {
         presentTimer_.stop();
         return;
     }
-    const qint64 waitNs = tickTime(nextTick_) - nowNs();
+    const qint64 waitNs = tickTime(queue_.front().tick) - nowNs();
     presentTimer_.start(int(std::max<qint64>(0, waitNs / kMs)));
 }
 
 void ScreenInterpolationController::presentDue()
 {
+    if (queue_.empty()) return;
     const qint64 now = nowNs();
-    // Missed ticks (GUI stall): continue from the current time.
     const qint64 currentTick = qint64(std::floor(double(now + kMs - epochNs_) / tickPeriodNs_));
-    if (currentTick > nextTick_ + 1) nextTick_ = currentTick;
-    if (tickTime(nextTick_) > now + kMs) {
+    if (queue_.front().tick > currentTick) {
         schedule(); // woke up early
         return;
     }
-    pushSample(timerLateSamplesMs_, double(now - tickTime(nextTick_)) / kMs);
+    pushSample(timerLateSamplesMs_, double(now - tickTime(queue_.front().tick)) / kMs);
 
-    const qint64 tick = nextTick_;
-    ++nextTick_;
+    // Show the newest frame that is due; older due frames were overtaken
+    // (GUI stall) and are dropped.
     int chosen = -1;
     Presentation shown;
-    while (!queue_.empty() && queue_.front().tick <= tick) {
+    while (!queue_.empty() && queue_.front().tick <= currentTick) {
         if (chosen >= 0) {
             ++counters_.droppedPresentations;
             freeSlot(chosen);
@@ -859,13 +923,11 @@ void ScreenInterpolationController::presentDue()
             slots_[size_t(chosen)].state = Slot::State::Shown;
         }
         lastInput_ = {};
-        lastPresentedTick_ = tick;
+        lastPresentedTick_ = shown.tick;
         shownContent_ = shown.content;
         ++counters_.presented;
         ++windowPresented_;
         if (shown.content != std::floor(shown.content)) ++counters_.presentedGenerated;
-        // Phase lock: nudge the clock toward the content times it shows.
-        epochNs_ += qint64(double(shown.wallNs - tickTime(tick)) * 0.05);
         emit repaintRequested();
     }
     schedule();
@@ -886,6 +948,7 @@ void ScreenInterpolationController::applyAudioDelay(double lagSeconds)
     // Re-apply only on a meaningful change (each change resyncs audio).
     if (std::abs(lagSeconds - appliedLagSeconds_) < 0.003) return;
     appliedLagSeconds_ = lagSeconds;
+    ++audioDelayChanges_;
     double value = originalAudioDelay_ + lagSeconds;
     mpv_set_property(mpv_, "audio-delay", MPV_FORMAT_DOUBLE, &value);
 }
@@ -929,6 +992,7 @@ void ScreenInterpolationController::logStats()
 
     if (!logPath_.isEmpty()) {
         QFile file(logPath_);
+        const auto resetWorkerMax = qScopeGuard([this] { workerMaxMs_.store(0.0); });
         if (file.open(QIODevice::Append)) {
             file.write(QJsonDocument(stats()).toJson(QJsonDocument::Compact) + '\n');
         }
@@ -967,6 +1031,14 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("amfRuntime", amf_ ? amf_->runtimeVersion() : QString());
     o.insert("genericGpuExecutionMs", generic_ ? generic_->lastGpuExecutionMs() : 0.0);
     o.insert("genericCpuSubmitMs", generic_ ? generic_->lastCpuSubmitMs() : 0.0);
+    if (generic_) {
+        const bool rife = generic_->motion() == GenericD3D11Fruc::Motion::Rife;
+        o.insert("genericMotion", rife ? "RIFE flownet" : "block matching");
+        o.insert("rifeModel", rife ? generic_->modelName() : QString());
+        o.insert("rifeAnalysisWidth", generic_->analysisSize().width());
+        o.insert("rifeAnalysisHeight", generic_->analysisSize().height());
+        o.insert("genericSeparateComputeDevice", generic_->separateComputeDevice());
+    }
     o.insert("capture", "mpv render output -> D3D11 texture (WGL_NV_DX_interop2)");
     o.insert("format", backend_ == Backend::GenericD3D11 ? "RGBA8 (same 8-bit output; BGRA inputs swizzled on GPU)"
                                                           : "BGRA8 (same 8-bit output as the normal path)");
@@ -1000,12 +1072,18 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("presented", counters_.presented);
     o.insert("presentedGenerated", counters_.presentedGenerated);
     o.insert("late", counters_.late);
+    o.insert("lateStale", counters_.lateStale);
+    o.insert("lateTick", counters_.lateTick);
+    o.insert("lateContent", counters_.lateContent);
+    o.insert("lateQueueFull", counters_.lateQueueFull);
     o.insert("droppedPresentations", counters_.droppedPresentations);
     o.insert("droppedOutputs", droppedOutputs_.load());
     o.insert("presentQueue", int(queue_.size()));
     o.insert("lastSubmitStatus", lastSubmitStatus_.load());
     o.insert("lastQueryStatus", lastQueryStatus_.load());
     o.insert("processingMs", lastProcessMs_.load());
+    o.insert("workerMs", workerMs_.load());
+    o.insert("workerMaxMs", workerMaxMs_.load());
     o.insert("targetFps", targetFps_ > 0 ? targetFps_ : outputRate());
     o.insert("outputRate", outputRate());
     o.insert("frcStages", configuredStages_);
@@ -1015,12 +1093,15 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("displaySlots", slotCount_);
     o.insert("skipped", counters_.skipped);
     o.insert("latencyMs", latencyNs_ / kMs);
+    o.insert("latencyChanges", latencyChanges_);
+    o.insert("audioDelayChanges", audioDelayChanges_);
     o.insert("intendedToAvailableP95Ms", percentile(processingSamplesMs_, 0.95));
     o.insert("guiDispatchP50Ms", percentile(dispatchSamplesMs_, 0.5));
     o.insert("guiDispatchP95Ms", percentile(dispatchSamplesMs_, 0.95));
     o.insert("timerLateP50Ms", percentile(timerLateSamplesMs_, 0.5));
     o.insert("timerLateP95Ms", percentile(timerLateSamplesMs_, 0.95));
     o.insert("captureLockP95Ms", percentile(captureLockMs_, 0.95));
+    o.insert("captureJitterP95Ms", percentile(captureJitterMs_, 0.95));
     o.insert("captureRenderP50Ms", percentile(captureRenderMs_, 0.5));
     o.insert("captureRenderP95Ms", percentile(captureRenderMs_, 0.95));
     o.insert("captureUnlockP95Ms", percentile(captureUnlockMs_, 0.95));

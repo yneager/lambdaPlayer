@@ -8,8 +8,16 @@
   <link rel="stylesheet" href="./home.css" />
   <link rel="stylesheet" href="./addons.css" />
   <link rel="stylesheet" href="./window.css" />
+  <link rel="stylesheet" href="./motion.css" />
 </head>
 <body>
+  <div class="launch-intro" aria-hidden="true">
+    <div class="launch-emblem">
+      <span class="launch-lambda">λ</span>
+      <span class="launch-name">LAMBDA</span>
+      <span class="launch-rule"></span>
+    </div>
+  </div>
   <div class="page-noise"></div>
   <div class="aurora aurora-a"></div>
   <div class="aurora aurora-b"></div>
@@ -17,7 +25,7 @@
   <header class="nav-shell" data-drag>
     <nav class="nav glass">
       <a class="brand" href="#home" data-view-link="home" aria-label="Home" title="Home">
-        <span class="brand-mark"><i></i><i></i></span>
+        <span class="brand-mark" aria-hidden="true">λ</span>
         <span>LAMBDA</span>
       </a>
 
@@ -110,7 +118,7 @@
 
     <section class="content-stage addons-empty" hidden>
       <div class="empty-card glass">
-        <div class="empty-icon" aria-hidden="true"><span class="brand-mark"><i></i><i></i></span></div>
+        <div class="empty-icon" aria-hidden="true"><span class="brand-mark">λ</span></div>
         <div class="empty-copy">
           <span class="eyebrow">STREMIO ADD-ONS</span>
           <h2>Bring catalogs, details and sources into LAMBDA</h2>
@@ -286,7 +294,7 @@
   <script src="./home.js"></script>
 
   <footer>
-    <div class="footer-brand"><span class="brand-mark"><i></i><i></i></span><strong>LAMBDA</strong></div>
+    <div class="footer-brand"><span class="brand-mark" aria-hidden="true">λ</span><strong>LAMBDA</strong></div>
     <p>LAMBDA Player · local media and Stremio add-ons</p>
     <span>© 2026 LAMBDA Player</span>
   </footer>

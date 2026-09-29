@@ -136,7 +136,11 @@
         state.history = [];
       }
     }
-    if (leaving === 'details' && view !== 'details') cancelDetails();
+    if (leaving === 'details' && view !== 'details') {
+      finishCardFlight();
+      q('.details-view').classList.remove('shared-entry');
+      cancelDetails();
+    }
     state.view = view;
     qa('main.view').forEach(m => { m.hidden = m.dataset.view !== view; });
     setActiveLink(view);
@@ -173,7 +177,7 @@
     const sub = [meta.releaseInfo, typeSingular(meta.type)].filter(Boolean).join(' · ');
     info.appendChild(el('small', null, sub));
     card.appendChild(info);
-    card.addEventListener('click', e => { e.preventDefault(); openDetails(meta, context); });
+    card.addEventListener('click', e => { e.preventDefault(); openDetails(meta, context, card); });
     return card;
   }
 
@@ -612,6 +616,55 @@
   // in add-on order is shown (serialize_meta_details). Streams are asked for
   // stream/{meta type}/{video id}.
   let details = null;
+  let cardFlight = null;
+
+  function finishCardFlight() {
+    if (!cardFlight) return;
+    const flight = cardFlight;
+    cardFlight = null;
+    clearTimeout(flight.guard);
+    clearTimeout(flight.settleTimer);
+    flight.target.classList.remove('flight-target');
+    flight.clone.remove();
+  }
+
+  function settleCardFlight() {
+    if (!cardFlight || cardFlight.settling) return;
+    cardFlight.settling = true;
+    cardFlight.target.classList.remove('flight-target');
+    cardFlight.clone.classList.add('is-settling');
+    cardFlight.settleTimer = setTimeout(finishCardFlight, 300);
+  }
+
+  function flyCardToPoster(clone, source) {
+    const target = q('.details-poster');
+    const destination = target.getBoundingClientRect();
+    if (source.width < 20 || destination.width < 20 || destination.height < 20) return;
+    clone.classList.add('card-flight');
+    clone.removeAttribute('href');
+    clone.setAttribute('aria-hidden', 'true');
+    clone.tabIndex = -1;
+    Object.assign(clone.style, {
+      left: destination.left + 'px', top: destination.top + 'px',
+      width: destination.width + 'px', height: destination.height + 'px'
+    });
+    clone.style.setProperty('--flight-x', (source.left - destination.left) + 'px');
+    clone.style.setProperty('--flight-y', (source.top - destination.top) + 'px');
+    clone.style.setProperty('--flight-sx', source.width / destination.width);
+    clone.style.setProperty('--flight-sy', source.height / destination.height);
+    document.body.appendChild(clone);
+    target.classList.add('flight-target');
+    cardFlight = {clone, target, guard: 0, settleTimer: 0, settling: false};
+    // Commit the first position before starting the compositor transition.
+    void clone.offsetWidth;
+    requestAnimationFrame(() => {
+      if (cardFlight && cardFlight.clone === clone) clone.classList.add('is-flying');
+    });
+    clone.addEventListener('transitionend', e => {
+      if (e.propertyName === 'transform') settleCardFlight();
+    });
+    cardFlight.guard = setTimeout(settleCardFlight, 1230);
+  }
 
   function cancelDetails() {
     if (!details) return;
@@ -619,14 +672,20 @@
     details = null;
   }
 
-  function openDetails(preview, context) {
+  function openDetails(preview, context, originCard = null) {
+    finishCardFlight();
+    const flightEnabled = !!originCard && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const source = flightEnabled ? originCard.getBoundingClientRect() : null;
+    const clone = flightEnabled ? originCard.cloneNode(true) : null;
     cancelDetails();
     const token = newToken('meta');
     details = {token, type: preview.type, id: preview.id, preview, slots: [], results: [], meta: null, metaSlot: -1,
                streamsToken: null, video: null, season: null, context: context || {}};
     groups.details.add(token);
+    q('.details-view').classList.toggle('shared-entry', flightEnabled);
     show('details');
     renderDetailsHeader(preview, null);
+    if (clone) flyCardToPoster(clone, source);
     q('.episodes-panel').hidden = true;
     q('.sources-panel').hidden = true;
     q('.details-actions').innerHTML = '';
