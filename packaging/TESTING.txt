@@ -1,0 +1,31 @@
+LAMBDA Player - friend test build (Windows 10/11 x64)
+
+Run LAMBDA-Player-Setup-0.2.7-test.1-x64.exe. It installs for your Windows user,
+with no separate Qt, Python, mpv, or streaming engine installation needed.
+Alternatively, open "LAMBDA Player\LambdaPlayer.exe" directly.
+
+Home > Your library > Add folder:
+Choose one movie or one series folder. Season subfolders are scanned too.
+Click its card to see/play the files. Find artwork lets you correct a title
+match; Rescan folder adds newly downloaded episodes. Removing a card does
+not delete videos. Posters are cached for offline use after matching.
+
+Playback position is saved every five seconds, on pause, when returning
+Home, when switching videos, and on normal exit. Continue Watching includes
+local and online episodes. Online entries reopen their saved episode's
+sources; choose an available stream, and playback resumes at the saved time.
+Online catalogs and sources depend on the add-ons installed on your PC.
+Finished videos play again from the beginning.
+
+To make it the default video player:
+Windows Settings > Apps > Default apps > LAMBDA Player. Choose the file
+types you want. Or right-click a video > Open with > Choose another app >
+LAMBDA Player > Always. Setup offers the application without replacing
+your existing defaults automatically.
+
+Please test: nested season folders, correct/wrong artwork matches, resume
+after restarting, opening a file from Explorer, online episode resume,
+subtitles, fullscreen, scrolling, interpolation, and uninstalling.
+Interpolation throughput depends on your GPU and display refresh rate.
+
+This is the public 0.2.7-test.1 prerelease for testing and feedback.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
@@ -34,12 +35,13 @@ public:
     void setVolume(int volume);
     void setSpeed(double speed);
     void setQuality(const QString &primary, const QString &secondary);
+    void setFrcDiagnostics(const QJsonObject &stats);
     void setChapter(const QString &index, const QString &title);
     void setChromeVisible(bool visible);
     void setSettings(const QStringList &audio, int audioIndex,
                      const QStringList &subtitles, int subtitleIndex,
                      const QStringList &interpolation, const QList<bool> &interpolationEnabled,
-                     int interpolationIndex, const QStringList &subtitleGroups = {});
+                     int interpolationIndex, const QStringList &subtitleGroups = {}, int fastQuality = 1);
     void setActive(bool active);
 
 signals:
@@ -61,6 +63,7 @@ signals:
     void audioTrackRequested(int index);
     void subtitleTrackRequested(int index);
     void interpolationRequested(int index);
+    void fastQualityRequested(int quality);
     void videoRectChanged(int x, int y, int width, int height, int radius);
     void subtitleInsetChanged(int pixels);
 
@@ -106,4 +109,5 @@ private:
     int audioIndex_ = 0;
     int subtitleIndex_ = 0;
     int interpolationIndex_ = 0;
+    int fastQuality_ = 1;
 };

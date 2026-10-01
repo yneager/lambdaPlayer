@@ -6,6 +6,7 @@
 
 class QWebEngineView;
 class WindowBridge;
+class LocalLibrary;
 
 class HomePage final : public QWidget
 {
@@ -14,6 +15,7 @@ class HomePage final : public QWidget
 public:
     explicit HomePage(QObject *addonsBridge, QWidget *parent = nullptr);
 
+    LocalLibrary *library() const { return library_; }
     WindowBridge *windowBridge() const { return windowBridge_; }
 
     // Recently played files for "Continue watching" (see MainWindow::recentsJson).
@@ -21,6 +23,7 @@ public:
     // Current libmpv session (a file is loaded and can be resumed).
     void setCurrentMedia(const QString &displayName, const QString &path, bool available);
 
+    void openOnline(const QJsonObject &item);
     void toast(const QString &message, bool warning = false);
     void playLeaveAnimation();
     void playEnterAnimation();
@@ -40,6 +43,7 @@ private:
     void pushState();
     void runScript(const QString &script);
 
+    LocalLibrary *library_ = nullptr;
     QWebEngineView *view_ = nullptr;
     WindowBridge *windowBridge_ = nullptr;
     QJsonArray recents_;

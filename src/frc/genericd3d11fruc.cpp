@@ -160,10 +160,11 @@ bool GenericD3D11Fruc::open(ID3D11Device *device, QString *error)
         return false;
     }
     if (!motionOverridden_) {
-        motion_ = qEnvironmentVariable("LAMBDA_GENERIC_FRC_MOTION") == QLatin1String("block") ? Motion::Block
-                                                                                                 : Motion::Rife;
+        const QString choice = qEnvironmentVariable("LAMBDA_GENERIC_FRC_MOTION");
+        motion_ = choice == QLatin1String("block") ? Motion::Block
+                : choice == QLatin1String("rife-reuse") ? Motion::RifeReusable : Motion::Rife;
     }
-    if (motion_ == Motion::Rife && !loadRife(error)) {
+    if (motion_ != Motion::Block && !loadRife(error)) {
         close();
         return false;
     }
@@ -295,7 +296,8 @@ bool GenericD3D11Fruc::waitForOutput(const OutputSlot &slot, QString *error)
 QString GenericD3D11Fruc::name() const
 {
     return motion_ == Motion::Block ? QStringLiteral("Generic D3D11 block matching")
-                                    : QStringLiteral("Generic D3D11 RIFE");
+         : motion_ == Motion::RifeReusable ? QStringLiteral("Generic D3D11 RIFE reusable flow")
+         : QStringLiteral("Generic D3D11 RIFE");
 }
 
 bool GenericD3D11Fruc::loadRife(QString *error)
@@ -380,22 +382,34 @@ bool GenericD3D11Fruc::initializeRife(double outputFps, QString *error)
     rife_.setFlushInterval(flushOk ? std::max(0, flushInterval) : kDefaultFlushDispatches);
     // Flow (A.xy, B.xy) and mask at analysis size, sampled bilinearly by the
     // full-resolution synthesis.
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < (motion_ == Motion::RifeReusable && fastQuality_ == 2 ? 4 : 2); ++i) {
         D3D11_TEXTURE2D_DESC desc{};
         desc.Width = analysisWidth_;
         desc.Height = analysisHeight_;
         desc.MipLevels = 1;
         desc.ArraySize = 1;
-        desc.Format = i == 0 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R32_FLOAT;
+        desc.Format = i % 2 == 0 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R32_FLOAT;
         desc.SampleDesc.Count = 1;
         desc.Usage = D3D11_USAGE_DEFAULT;
         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-        MotionTexture &target = i == 0 ? rifeMotion_ : rifeMask_;
+        MotionTexture &target = i == 0 ? rifeMotion_ : i == 1 ? rifeMask_
+                               : i == 2 ? rifeMotionBackup_ : rifeMaskBackup_;
         HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &target.texture);
         if (SUCCEEDED(hr)) hr = device_->CreateShaderResourceView(target.texture.Get(), nullptr, &target.srv);
         if (SUCCEEDED(hr)) hr = device_->CreateUnorderedAccessView(target.texture.Get(), nullptr, &target.uav);
         if (FAILED(hr)) {
             if (error) *error = hresultText(QStringLiteral("CreateTexture2D(RIFE motion)"), hr);
+            return false;
+        }
+    }
+    if (motion_ == Motion::RifeReusable) {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = sizeof(float);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        const HRESULT hr = device_->CreateBuffer(&desc, nullptr, &sceneReadback_);
+        if (FAILED(hr)) {
+            if (error) *error = hresultText(QStringLiteral("CreateBuffer(scene readback)"), hr);
             return false;
         }
     }
@@ -453,7 +467,7 @@ void GenericD3D11Fruc::runSceneDiff()
     bindIo(sceneShader_.Get(), &k, {a.srv, b.srv}, sceneUav_.Get(), 1, 1, 1);
 }
 
-void GenericD3D11Fruc::runSynthesize(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current, float t)
+void GenericD3D11Fruc::packRifeMotion()
 {
     const RifeD3D11Network::TensorView flowA = rife_.flowA();
     const RifeD3D11Network::TensorView flowB = rife_.flowB();
@@ -473,13 +487,19 @@ void GenericD3D11Fruc::runSynthesize(ID3D11ShaderResourceView *previous, ID3D11S
            (analysisWidth_ + 7) / 8, (analysisHeight_ + 7) / 8, 1);
     ID3D11UnorderedAccessView *nullUav = nullptr;
     context_->CSSetUnorderedAccessViews(1, 1, &nullUav, nullptr);
+}
 
+void GenericD3D11Fruc::runSynthesize(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current, float t,
+                                     bool reusable, bool noMotion)
+{
     IoParameters k{};
     k.p[0] = width_;
     k.p[1] = height_;
     k.p[2] = analysisWidth_;
     k.p[3] = analysisHeight_;
+    k.p[8] = reusable ? 1u : 0u;
     k.p[9] = sceneThreshold_ > 0.0f ? 1u : 0u;
+    k.p[10] = noMotion ? 1u : 0u;
     k.f[0] = t;
     k.f[1] = sceneThreshold_;
     bindIo(synthesizeShader_.Get(), &k, {previous, current, rifeMotion_.srv.Get(), rifeMask_.srv.Get(), sceneSrv_.Get()},
@@ -501,6 +521,10 @@ bool GenericD3D11Fruc::initialize(int width, int height, const FrcSettings &sett
 bool GenericD3D11Fruc::initialize(int width, int height, const FrcSettings &, int stages,
                                   double sourceFps, double outputFps, QString *error)
 {
+    skippedStaticPairs_.store(0);
+    skippedCutPairs_.store(0);
+    refinedPairs_.store(0);
+    sourceBudgetMs_ = 1000.0 / std::max(1.0, sourceFps);
     terminate();
     if (!device_ || !context_) {
         if (error) *error = QStringLiteral("Generic D3D11 FRUC is not open");
@@ -595,7 +619,7 @@ bool GenericD3D11Fruc::initialize(int width, int height, const FrcSettings &, in
         return false;
     }
 
-    if (motion_ == Motion::Rife) {
+    if (motion_ != Motion::Block) {
         bool thresholdOk = false;
         const double threshold = qEnvironmentVariable("LAMBDA_RIFE_SCENE_THRESHOLD").toDouble(&thresholdOk);
         sceneThreshold_ = thresholdOk ? float(threshold) : kDefaultSceneThreshold;
@@ -908,13 +932,40 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
         pending.clear();
         return true;
     };
-    const bool rife = motion_ == Motion::Rife;
+    const bool rife = motion_ != Motion::Block;
+    bool refinePair = false;
+    bool skipMotion = false;
     if (needsMotion && rife) {
         stamp("start");
         runPrepare(previous->srv.Get(), rife_.input(0));
         runPrepare(current->srv.Get(), rife_.input(1));
         runSceneDiff();
         stamp("prepare+scene");
+        if (motion_ == Motion::RifeReusable && sceneReadback_) {
+            context_->CopyResource(sceneReadback_.Get(), sceneBuffer_.Get());
+            D3D11_MAPPED_SUBRESOURCE mapped{};
+            if (SUCCEEDED(context_->Map(sceneReadback_.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+                const float difference = *static_cast<const float *>(mapped.pData);
+                const bool staticPair = difference < 0.0025f;
+                const bool cutPair = sceneThreshold_ > 0.0f && difference >= sceneThreshold_;
+                skipMotion = staticPair || cutPair;
+                if (staticPair) ++skippedStaticPairs_;
+                else if (cutPair) ++skippedCutPairs_;
+                refinePair = !skipMotion && fastQuality_ == 2 && difference > 0.025f
+                    && lastGpuExecutionMs_.load() < sourceBudgetMs_ * 0.7;
+                context_->Unmap(sceneReadback_.Get(), 0);
+            }
+        }
+        if (motion_ == Motion::RifeReusable && !skipMotion) {
+            rife_.run(context_.Get(), 0.5f);
+            stamp("network");
+            packRifeMotion();
+            stamp("pack motion");
+            if (refinePair) {
+                context_->CopyResource(rifeMotionBackup_.texture.Get(), rifeMotion_.texture.Get());
+                context_->CopyResource(rifeMaskBackup_.texture.Get(), rifeMask_.texture.Get());
+            }
+        }
     }
     if (needsMotion && !rife
         && (!runDownscale(previous->srv.Get(), motionFrameA_.uav.Get(), error)
@@ -944,11 +995,29 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
             rendered = runCopy(current->srv.Get(), error);
             stamp("copy source");
         } else if (rife) {
-            // RIFE's flow depends on the timestep: one inference per output.
-            rife_.run(context_.Get(), float(localTime));
-            stamp("network");
-            runSynthesize(previous->srv.Get(), current->srv.Get(), float(localTime));
+            // Exact RIFE runs per timestep; fast mode reuses the midpoint
+            // flow for every requested output in this source-frame pair.
+            if (motion_ == Motion::Rife) {
+                rife_.run(context_.Get(), float(localTime));
+                stamp("network");
+                packRifeMotion();
+                stamp("pack motion");
+            }
+            const double refineTime = (qint64(std::llround(previousContent_)) & 1) ? 0.8 : 0.2;
+            const bool exact = refinePair && std::abs(localTime - refineTime) < outputStep_ * 0.51;
+            if (exact) {
+                rife_.run(context_.Get(), float(localTime));
+                packRifeMotion();
+                ++refinedPairs_;
+                stamp("selective exact");
+            }
+            runSynthesize(previous->srv.Get(), current->srv.Get(), float(localTime),
+                          !exact && motion_ == Motion::RifeReusable, skipMotion);
             stamp("synthesize");
+            if (exact) {
+                context_->CopyResource(rifeMotion_.texture.Get(), rifeMotionBackup_.texture.Get());
+                context_->CopyResource(rifeMask_.texture.Get(), rifeMaskBackup_.texture.Get());
+            }
         } else {
             rendered = runWarp(previous->srv.Get(), current->srv.Get(), float(localTime), error);
         }
@@ -1067,6 +1136,9 @@ void GenericD3D11Fruc::terminate()
     rife_.release();
     rifeMotion_ = {};
     rifeMask_ = {};
+    rifeMotionBackup_ = {};
+    rifeMaskBackup_ = {};
+    sceneReadback_.Reset();
     analysisWidth_ = analysisHeight_ = paddedWidth_ = paddedHeight_ = 0;
     linearSampler_.Reset();
     constants_.Reset();

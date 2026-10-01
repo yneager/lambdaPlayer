@@ -3,6 +3,7 @@ __pycache__/
 build/
 deps/
 portable/
+dist/
 
 resources/vui/InterVariable.woff2
 aqtinstall.log

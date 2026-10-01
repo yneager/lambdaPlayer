@@ -3,6 +3,7 @@
 #include "stremio/addonurl.h"
 #include "stremio/language.h"
 #include "homepage.h"
+#include "locallibrary.h"
 #include "playerchrome.h"
 #include "interpolationcontroller.h"
 #include "frc/screeninterpolationcontroller.h"
@@ -65,19 +66,23 @@
 #include <dwmapi.h>
 #endif
 
+namespace { QSettings appSettings(); }
+
 // Interpolation modes: original/RIFE, Generic D3D11 2x/60/120/200, then AMD AMF 2x/60/120/200.
 static constexpr int kGenericFrcModeIndex = 3;
 static constexpr int kGeneric60FrcModeIndex = 4;
 static constexpr int kGeneric120FrcModeIndex = 5;
 static constexpr int kGeneric200FrcModeIndex = 6;
 static constexpr int kAmfFrcModeIndex = 7;
-static constexpr int kFrcModeCount = 8;
-static constexpr double kFrcTargets[] = {0.0, 60.0, 120.0, 200.0, 0.0, 60.0, 120.0, 200.0};
+static constexpr int kFast240FrcModeIndex = 11;
+static constexpr int kFrcModeCount = 9;
+static constexpr double kFrcTargets[] = {0.0, 60.0, 120.0, 200.0, 0.0, 60.0, 120.0, 200.0, 240.0};
 static bool isFrcMode(int index) { return index >= kGenericFrcModeIndex && index < kGenericFrcModeIndex + kFrcModeCount; }
 static double frcTargetFor(int index) { return isFrcMode(index) ? kFrcTargets[index - kGenericFrcModeIndex] : 0.0; }
 static frc::ScreenInterpolationController::Backend frcBackendFor(int index)
 {
-    return index < kAmfFrcModeIndex ? frc::ScreenInterpolationController::Backend::GenericD3D11
+    return index < kAmfFrcModeIndex || index == kFast240FrcModeIndex
+                                    ? frc::ScreenInterpolationController::Backend::GenericD3D11
                                     : frc::ScreenInterpolationController::Backend::AmdAmf;
 }
 
@@ -104,6 +109,9 @@ MainWindow::MainWindow(QWidget *parent)
     connectWindowBridge(homePage_->windowBridge());
     connectWindowBridge(playerChrome_->windowBridge());
     loadRecents();
+    connect(homePage_->library(), &LocalLibrary::playRequested, this, &MainWindow::openPath);
+    connect(homePage_->library(), &LocalLibrary::notify, this, &MainWindow::showToast);
+    progressSaveTimer_.start();
 
     applyNativeFrame();
     updateWindowState();
@@ -231,7 +239,10 @@ void MainWindow::buildUi()
     connect(homePage_, &HomePage::resumeRequested, this, &MainWindow::resumeFromHome);
     connect(homePage_, &HomePage::openLicensesRequested, this, &MainWindow::openLicenses);
     connect(homePage_, &HomePage::openPathRequested, this, [this](const QString &path) {
-        openPath(path);
+        if (path.startsWith("online:")) {
+            const int i = recentIndex(path);
+            if (i >= 0) homePage_->openOnline(QJsonObject::fromVariantMap(recents_[i].toMap()));
+        } else openPath(path);
     });
 
     mainLayout_ = new QVBoxLayout(root_);
@@ -511,6 +522,7 @@ void MainWindow::buildUi()
     interpolationMode_->addItem("60 fps (AMD FRC)");
     interpolationMode_->addItem("120 fps (AMD FRC)");
     interpolationMode_->addItem("200 fps (AMD FRC)");
+    interpolationMode_->addItem("240 fps (Fast RIFE, experimental)");
     interpolationMode_->setCurrentIndex(0);
     interpolationMode_->setToolTip("Frame interpolation (RIFE v4.6 via VapourSynth, Vulkan GPU)");
 
@@ -599,6 +611,13 @@ void MainWindow::buildUi()
     });
     connect(playerChrome_, &PlayerChrome::interpolationRequested, this, [this](int index) {
         if (index >= 0 && index < interpolationMode_->count()) interpolationMode_->setCurrentIndex(index);
+    });
+    connect(playerChrome_, &PlayerChrome::fastQualityRequested, this, [this](int quality) {
+        fastQuality_ = qBound(0, quality, 2);
+        QSettings(QSettings::IniFormat, QSettings::UserScope, "LAMBDA", "LAMBDA Player")
+            .setValue("frc/fastQuality", fastQuality_);
+        if (frc_) frc_->setFastQuality(fastQuality_);
+        syncChromeSettings();
     });
     connect(playerChrome_, &PlayerChrome::videoRectChanged, this,
             [this](int x, int y, int width, int height, int radius) {
@@ -724,7 +743,8 @@ void MainWindow::initMpv()
     // position. Only the position and track choices are restored - never the
     // video filter chain (the optional @novarife RIFE filter stays Off until
     // the user enables it).
-    const QString watchLaterDir = QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+    const QString profileDir = qEnvironmentVariable("LAMBDA_DATA_DIR");
+    const QString watchLaterDir = QDir(profileDir.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) : profileDir)
                                       .filePath("watch_later");
     QDir().mkpath(watchLaterDir);
     mpv_set_option_string(mpv_, "watch-later-dir", QDir::toNativeSeparators(watchLaterDir).toUtf8().constData());
@@ -766,7 +786,12 @@ void MainWindow::initMpv()
 
     // Post-render AMD FRC (native resolution, no VapourSynth).
     frc_ = new frc::ScreenInterpolationController(mpv_, this);
+    fastQuality_ = qBound(0, QSettings(QSettings::IniFormat, QSettings::UserScope, "LAMBDA", "LAMBDA Player")
+                               .value("frc/fastQuality", 1).toInt(), 2);
+    frc_->setFastQuality(fastQuality_);
     video_->setFrameInterpolation(frc_);
+    connect(frc_, &frc::ScreenInterpolationController::diagnosticsUpdated,
+            playerChrome_, &PlayerChrome::setFrcDiagnostics);
     connect(frc_, &frc::ScreenInterpolationController::failed, this, [this](const QString &reason) {
         const QSignalBlocker blocker(interpolationMode_);
         interpolationMode_->setCurrentIndex(0);
@@ -874,6 +899,10 @@ void MainWindow::handleEvent(mpv_event *event)
                 seek_->setValue(int(position_ / duration_ * 1000));
             }
             updateTimeLabel();
+            if (mediaLoaded_ && progressSaveTimer_.elapsed() >= 5000) {
+                rememberCurrentProgress();
+                progressSaveTimer_.restart();
+            }
         } else if (name == "duration" && property->format == MPV_FORMAT_DOUBLE) {
             duration_ = *static_cast<double *>(property->data);
             updateTimeLabel();
@@ -925,11 +954,13 @@ void MainWindow::handleEvent(mpv_event *event)
         paused_ = false;
         eofReached_ = false;
         const QString fileName = currentMediaTitle();
-        if (!addonPlayback_) {
-            addRecent(currentPath_);
+        addRecent(progressKey_);
+        if (pendingResume_ > 0.0) {
+            command({"seek", QString::number(pendingResume_, 'f', 3), "absolute+exact"});
+            pendingResume_ = 0.0;
         }
         if (homePage_ && !currentPath_.isEmpty()) {
-            homePage_->setCurrentMedia(fileName, currentPath_, true);
+            homePage_->setCurrentMedia(fileName, progressKey_, true);
         }
         const QString eyebrow = addonPlayback_ && !addonPlayback_->addonName.isEmpty()
             ? QStringLiteral("NOW PLAYING · %1").arg(addonPlayback_->addonName.toUpper())
@@ -941,7 +972,8 @@ void MainWindow::handleEvent(mpv_event *event)
             playerChrome_->setMediaLoaded(true);
             playerChrome_->setMediaTitle(fileName, eyebrow);
         }
-        nextPath_ = addonPlayback_ ? QString() : findNextInFolder(currentPath_);
+        nextPath_ = addonPlayback_ ? QString() : homePage_->library()->nextFile(currentPath_);
+        if (!addonPlayback_ && nextPath_.isEmpty()) nextPath_ = findNextInFolder(currentPath_);
         if (addonPlayback_) {
             fetchAddonSubtitles();
         }
@@ -954,10 +986,12 @@ void MainWindow::handleEvent(mpv_event *event)
         QTimer::singleShot(0, this, &MainWindow::updateQualityBadge);
         // Benchmark-only entry point: the normal UI remains the sole control
         // path unless a local test explicitly requests Generic D3D11 FRC.
-        if (qEnvironmentVariable("LAMBDA_FRC_AUTOSTART") == QLatin1String("generic")) {
-            QTimer::singleShot(5000, this, [this] {
+        const QString frcAutostart = qEnvironmentVariable("LAMBDA_FRC_AUTOSTART");
+        if (frcAutostart == QLatin1String("generic") || frcAutostart == QLatin1String("generic-fast")) {
+            QTimer::singleShot(5000, this, [this, frcAutostart] {
                 if (mediaLoaded_ && video_ && video_->isRenderReady()) {
-                    interpolationModeChanged(kGenericFrcModeIndex);
+                    interpolationModeChanged(frcAutostart == QLatin1String("generic-fast")
+                                                 ? kFast240FrcModeIndex : kGenericFrcModeIndex);
                 }
             });
         }
@@ -1017,6 +1051,11 @@ void MainWindow::interpolationModeChanged(int index)
         // Post-render GPU FRC replaces the VapourSynth path entirely.
         if (!frc_) return;
         frc_->setBackend(frcBackendFor(index));
+        if (index == kFast240FrcModeIndex || frcMenuIndex_ == kFast240FrcModeIndex) {
+            frc_->setGenericMotion(index == kFast240FrcModeIndex
+                                       ? frc::GenericD3D11Fruc::Motion::RifeReusable
+                                       : frc::GenericD3D11Fruc::Motion::Rife);
+        }
         frc_->setTargetFps(frcTargetFor(index));
         frcMenuIndex_ = index;
         if (frc_->isEnabled()) {
@@ -1108,6 +1147,7 @@ void MainWindow::updateInterpolationLabels()
         interpolationMode_->setItemText(kGeneric60FrcModeIndex, "60 fps (Universal D3D11)");
         interpolationMode_->setItemText(kGeneric120FrcModeIndex, "120 fps (Universal D3D11)");
         interpolationMode_->setItemText(kGeneric200FrcModeIndex, "200 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kFast240FrcModeIndex, "240 fps (Fast RIFE, experimental)");
         interpolationMode_->setItemText(kAmfFrcModeIndex, QString("%1 fps (AMD FRC)").arg(formatFps(fps * 2.0)));
         // Fixed-rate FRC modes only make sense above the source rate.
         if (auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model())) {
@@ -1131,6 +1171,7 @@ void MainWindow::updateInterpolationLabels()
         interpolationMode_->setItemText(kGeneric60FrcModeIndex, "60 fps (Universal D3D11)");
         interpolationMode_->setItemText(kGeneric120FrcModeIndex, "120 fps (Universal D3D11)");
         interpolationMode_->setItemText(kGeneric200FrcModeIndex, "200 fps (Universal D3D11)");
+        interpolationMode_->setItemText(kFast240FrcModeIndex, "240 fps (Fast RIFE, experimental)");
         interpolationMode_->setItemText(kAmfFrcModeIndex, "Double frame rate (AMD FRC)");
         interpolationMode_->setItemText(0, "Original");
         interpolationMode_->setItemText(1, "Double frame rate (RIFE)");
@@ -1625,7 +1666,8 @@ void MainWindow::updateQualityBadge()
     const int mode = interpolationMode_ ? interpolationMode_->currentIndex() : 0;
     if (isFrcMode(mode)) {
         const double target = frcTargetFor(mode);
-        const QString backend = frcBackendFor(mode) == frc::ScreenInterpolationController::Backend::GenericD3D11
+        const QString backend = mode == kFast240FrcModeIndex ? QStringLiteral("FAST RIFE")
+            : frcBackendFor(mode) == frc::ScreenInterpolationController::Backend::GenericD3D11
             ? QStringLiteral("D3D11") : QStringLiteral("AMD FRC");
         qualitySecondary_->setText(target > 0 ? QString("%1 %2").arg(backend).arg(int(target)) : backend);
     } else if (mode == 1) {
@@ -1647,7 +1689,7 @@ void MainWindow::layoutOverlayWidgets()
 
     playerChrome_->setGeometry(root_->rect());
     if (fullscreenMode_) video_->clearMask();
-    if (fullscreenMode_ || video_->geometry().isEmpty() || video_->width() <= 1 || video_->height() <= 1) {
+    if (fullscreenMode_ || video_->geometry().isEmpty() || video_->width() < 320 || video_->height() < 180) {
         video_->setGeometry(root_->rect());
     }
 
@@ -1752,7 +1794,7 @@ void MainWindow::showHome()
     }
 
     homePage_->setCurrentMedia(mediaLoaded_ ? currentMediaTitle() : QString(),
-                               mediaLoaded_ ? currentPath_ : QString(), mediaLoaded_);
+                               mediaLoaded_ ? progressKey_ : QString(), mediaLoaded_);
     publishRecents();
 
     transitionTo(homePage_);
@@ -1769,6 +1811,10 @@ void MainWindow::resumeFromHome()
     // No session: continue with the most recent video, else ask for one.
     for (const QVariant &entry : recents_) {
         const QString path = entry.toMap().value("path").toString();
+        if (entry.toMap().value("online").toBool()) {
+            homePage_->openOnline(QJsonObject::fromVariantMap(entry.toMap()));
+            return;
+        }
         if (QFileInfo::exists(path)) {
             openPath(path);
             return;
@@ -1880,6 +1926,11 @@ const QStringList &videoNameFilters()
 
 QSettings appSettings()
 {
+    const QString dataDir = qEnvironmentVariable("LAMBDA_DATA_DIR");
+    if (!dataDir.isEmpty()) {
+        QDir().mkpath(dataDir);
+        return QSettings(QDir(dataDir).filePath("player.ini"), QSettings::IniFormat);
+    }
     return QSettings(QSettings::IniFormat, QSettings::UserScope, "LAMBDA", "LAMBDA Player");
 }
 
@@ -1997,6 +2048,9 @@ void MainWindow::openPath(const QString &path)
     }
 
     currentPath_ = info.absoluteFilePath();
+    progressKey_ = currentPath_;
+    const auto localHistory = appSettings().value("playback/history").toMap().value(progressKey_).toMap();
+    pendingResume_ = localHistory.value("watched").toBool() ? 0.0 : localHistory.value("position").toDouble();
     clearAddonSession();
     mediaLoaded_ = false;
     eofReached_ = false;
@@ -2052,6 +2106,9 @@ void MainWindow::openStream(const AddonPlayback &playback)
     clearAddonSession();
     addonPlayback_ = playback;
     currentPath_ = playback.source.url;
+    progressKey_ = "online:" + playback.type + ":" + playback.videoId;
+    const auto onlineHistory = appSettings().value("playback/history").toMap().value(progressKey_).toMap();
+    pendingResume_ = onlineHistory.value("watched").toBool() ? 0.0 : onlineHistory.value("position").toDouble();
     mediaLoaded_ = false;
     eofReached_ = false;
     nextPath_.clear();
@@ -2358,6 +2415,16 @@ void MainWindow::addRecent(const QString &path)
         entry = recents_.takeAt(index).toMap();
     }
     entry.insert("path", path);
+    if (addonPlayback_) {
+        entry.insert("online", true);
+        entry.insert("name", currentMediaTitle());
+        entry.insert("type", addonPlayback_->type);
+        entry.insert("metaId", addonPlayback_->metaId);
+        entry.insert("videoId", addonPlayback_->videoId);
+        entry.insert("poster", addonPlayback_->poster);
+        entry.insert("title", addonPlayback_->title);
+        entry.insert("episodeLabel", addonPlayback_->episodeLabel);
+    }
     entry.insert("opened", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
     recents_.prepend(entry);
     while (recents_.size() > kMaxRecents) {
@@ -2382,17 +2449,18 @@ void MainWindow::rememberCurrentProgress()
     if (!mediaLoaded_ || currentPath_.isEmpty()) {
         return;
     }
-    const int index = recentIndex(currentPath_);
-    if (index < 0) {
-        return;
-    }
-    QVariantMap entry = recents_[index].toMap();
+    if (progressKey_.isEmpty()) return;
+    const int index = recentIndex(progressKey_);
+    QVariantMap entry = index >= 0 ? recents_[index].toMap() : QVariantMap();
     entry.insert("position", position_);
     entry.insert("duration", duration_);
     entry.insert("watched", eofReached_ || (duration_ > 0.0 && position_ / duration_ > 0.97));
-    recents_[index] = entry;
+    if (index >= 0) recents_[index] = entry;
+    auto history = appSettings().value("playback/history").toMap();
+    history.insert(progressKey_, entry);
+    appSettings().setValue("playback/history", history);
     saveRecents();
-    publishRecents();
+    if (homePage_->isVisible()) publishRecents();
 }
 
 void MainWindow::publishRecents()
@@ -2405,15 +2473,16 @@ void MainWindow::publishRecents()
         const QVariantMap entry = value.toMap();
         const QString path = entry.value("path").toString();
         const QFileInfo info(path);
-        if (!info.exists()) {
+        if (!entry.value("online").toBool() && !info.exists()) {
             continue;
         }
         const double position = entry.value("position").toDouble();
         const double duration = entry.value("duration").toDouble();
         QJsonObject item;
         item.insert("path", path);
-        item.insert("name", info.completeBaseName());
-        item.insert("ext", info.suffix().toUpper());
+        item.insert("name", entry.value("online").toBool() ? entry.value("name").toString() : info.completeBaseName());
+        item.insert("ext", entry.value("online").toBool() ? "ONLINE" : info.suffix().toUpper());
+        for (const QString &key : {QString("online"), QString("type"), QString("metaId"), QString("videoId"), QString("poster"), QString("title"), QString("episodeLabel")}) item.insert(key, QJsonValue::fromVariant(entry.value(key)));
         item.insert("progress", duration > 0.0 ? qBound(0.0, position / duration, 1.0) : 0.0);
         item.insert("remaining", duration > 0.0 ? qMax(0.0, duration - position) : 0.0);
         item.insert("watched", entry.value("watched").toBool());
@@ -2745,7 +2814,7 @@ void MainWindow::syncChromeSettings()
     playerChrome_->setSettings(audio, qMax(0, audioTrack_->currentIndex()),
                                subtitles, qMax(0, subtitleTrack_->currentIndex()),
                                interpolation, interpolationEnabled,
-                               qMax(0, interpolationMode_->currentIndex()), subtitleGroups);
+                               qMax(0, interpolationMode_->currentIndex()), subtitleGroups, fastQuality_);
 }
 
 QString MainWindow::formatTime(double seconds)

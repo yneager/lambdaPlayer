@@ -1,4 +1,5 @@
 #include "homepage.h"
+#include "locallibrary.h"
 #include "windowbridge.h"
 
 #include <QCoreApplication>
@@ -167,6 +168,8 @@ HomePage::HomePage(QObject *addonsBridge, QWidget *parent)
     auto *bridge = new HomeBridge(this);
     windowBridge_ = new WindowBridge(this);
     auto *channel = new QWebChannel(page);
+    library_ = new LocalLibrary(this);
+    channel->registerObject("library", library_);
     channel->registerObject("homeBridge", bridge);
     channel->registerObject("windowBridge", windowBridge_);
     if (addonsBridge) {
@@ -227,6 +230,11 @@ void HomePage::pushState()
     const QString recentsJson = QString::fromUtf8(QJsonDocument(recents_).toJson(QJsonDocument::Compact));
     runScript(QString("window.lambdaHome&&(lambdaHome.setSession(%1),lambdaHome.setRecents(%2));")
                   .arg(sessionJson, recentsJson));
+}
+
+void HomePage::openOnline(const QJsonObject &item)
+{
+    runScript(QString("window.lambdaHome&&lambdaHome.openOnline(%1);").arg(QString::fromUtf8(QJsonDocument(item).toJson(QJsonDocument::Compact))));
 }
 
 void HomePage::toast(const QString &message, bool warning)

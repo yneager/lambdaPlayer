@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QStyleFactory>
@@ -48,6 +49,7 @@ int main(int argc, char *argv[])
     app.setApplicationName("LAMBDA Player");
     app.setOrganizationName("LAMBDA");
     app.setApplicationVersion(LAMBDA_VERSION);
+    app.setWindowIcon(QIcon(":/branding/lambda.ico"));
     app.setStyle(QStyleFactory::create("Fusion"));
 
     app.setStyleSheet(R"QSS(
@@ -501,8 +503,8 @@ int main(int argc, char *argv[])
     window.resize(1360, 840);
     window.show();
 
-    if (argc > 1) {
-        window.openPath(QString::fromLocal8Bit(argv[1]));
+    if (app.arguments().size() > 1) {
+        window.openPath(app.arguments().at(1));
     }
 
     return app.exec();

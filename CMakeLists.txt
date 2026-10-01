@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
-project(LambdaPlayer VERSION 0.2.6 LANGUAGES CXX)
+project(LambdaPlayer VERSION 0.2.7 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Network Widgets OpenGLWidgets Quick WebEngineWidgets WebChannel)
+find_package(Qt6 REQUIRED COMPONENTS Core Network Widgets Concurrent OpenGLWidgets Quick WebEngineWidgets WebChannel)
 
 # Stremio addon protocol client (no GUI dependencies; shared with the tests).
 qt_add_library(lambda_stremio STATIC
@@ -67,6 +67,8 @@ qt_add_executable(LambdaPlayer WIN32
   src/addonsbridge.h
   src/stremiobackend.cpp
   src/stremiobackend.h
+  src/locallibrary.cpp
+  src/locallibrary.h
   src/homepage.cpp
   src/homepage.h
   src/playerchrome.cpp
@@ -104,7 +106,7 @@ qt_add_executable(LambdaPlayer WIN32
 
 target_include_directories(LambdaPlayer PRIVATE "${MPV_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src"
                            "${CMAKE_CURRENT_SOURCE_DIR}/third_party/amf")
-target_link_libraries(LambdaPlayer PRIVATE lambda_stremio Qt6::Widgets Qt6::OpenGLWidgets Qt6::Quick Qt6::WebEngineWidgets Qt6::WebChannel "${MPV_LIBRARY}")
+target_link_libraries(LambdaPlayer PRIVATE lambda_stremio Qt6::Concurrent Qt6::Widgets Qt6::OpenGLWidgets Qt6::Quick Qt6::WebEngineWidgets Qt6::WebChannel "${MPV_LIBRARY}")
 
 set(VUI_RESOURCE_FILES
   resources/vui/index.html
@@ -145,6 +147,9 @@ qt_add_resources(LambdaPlayer "frc_shaders"
 target_compile_definitions(LambdaPlayer PRIVATE LAMBDA_VERSION="${PROJECT_VERSION}")
 
 if(WIN32)
+  enable_language(RC)
+  configure_file(resources/branding/windows.rc.in "${CMAKE_CURRENT_BINARY_DIR}/windows.rc" @ONLY)
+  target_sources(LambdaPlayer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/windows.rc")
   target_compile_definitions(LambdaPlayer PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
   # dwmapi: rounded corners / shadow for the custom-framed window.
   target_link_libraries(LambdaPlayer PRIVATE dwmapi)
@@ -159,6 +164,10 @@ if(MSVC)
 endif()
 
 set_target_properties(LambdaPlayer PROPERTIES OUTPUT_NAME "LambdaPlayer")
+qt_add_resources(LambdaPlayer "branding"
+  PREFIX "/branding"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding"
+  FILES resources/branding/lambda.ico resources/branding/lambda.svg)
 
 # FRC compute shaders are compiled at build time with fxc (Windows SDK) and
 # embedded as :/frc/cso/<file>_<entry>.cso. The RIFE kernels take ~25 s to
@@ -248,6 +257,13 @@ option(LAMBDA_BUILD_TESTS "Build the Stremio addon protocol tests" ON)
 if(LAMBDA_BUILD_TESTS)
   enable_testing()
   find_package(Qt6 REQUIRED COMPONENTS Test)
+  qt_add_executable(tst_locallibrary tests/tst_locallibrary.cpp src/locallibrary.cpp src/locallibrary.h)
+  target_include_directories(tst_locallibrary PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_link_libraries(tst_locallibrary PRIVATE Qt6::Widgets Qt6::Concurrent Qt6::Network Qt6::Test)
+  if(MSVC)
+    target_compile_options(tst_locallibrary PRIVATE /utf-8)
+  endif()
+  add_test(NAME locallibrary COMMAND tst_locallibrary)
   set(LAMBDA_TESTS
     addonclient
     addonmanager

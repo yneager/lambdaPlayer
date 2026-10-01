@@ -174,6 +174,7 @@ private:
     InterpolationController *interpolation_ = nullptr;
     frc::ScreenInterpolationController *frc_ = nullptr;
     int frcMenuIndex_ = 7; // selected AMD FRC entry
+    int fastQuality_ = 1;
 
     QWidget *appRoot_ = nullptr;
     QStackedWidget *stack_ = nullptr;
@@ -226,6 +227,9 @@ private:
     QPropertyAnimation *controlsSlide_ = nullptr;
 
     QString currentPath_;
+    QString progressKey_;
+    double pendingResume_ = 0.0;
+    QElapsedTimer progressSaveTimer_;
 
     struct AddonSubtitle
     {

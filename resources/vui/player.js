@@ -1,7 +1,7 @@
 (() => {
   let bridge = null;
   let state = {};
-  let settings = {audio:[], subtitles:[], interpolation:[], audioIndex:0, subtitleIndex:0, interpolationIndex:0};
+  let settings = {audio:[], subtitles:[], interpolation:[], audioIndex:0, subtitleIndex:0, interpolationIndex:0, fastQuality:1};
   const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   const player = document.querySelector('.player');
   const q = (s, root=document) => root.querySelector(s);
@@ -275,7 +275,21 @@
     load.addEventListener('click', () => call('action', 'load-subtitle'));
     sub.appendChild(load);
     body.appendChild(sub);
-    body.appendChild(makeGroup('Smoothness', 'interpolation', settings.interpolation, settings.interpolationIndex, i => call('selectInterpolation', i)));
+    const smoothness = makeGroup('Smoothness', 'interpolation', settings.interpolation, settings.interpolationIndex, i => call('selectInterpolation', i));
+    if (settings.interpolationIndex === 11) {
+      const labels = ['Stable', 'Balanced', 'Maximum smoothness'];
+      const quality = document.createElement('label');
+      quality.className = 'lambda-fast-quality';
+      quality.innerHTML = '<span>Fast RIFE quality <strong></strong></span><input type="range" min="0" max="2" step="1" aria-label="Fast RIFE quality">';
+      const slider = q('input', quality);
+      const value = q('strong', quality);
+      slider.value = String(Math.max(0, Math.min(2, Number(settings.fastQuality) || 0)));
+      value.textContent = labels[Number(slider.value)];
+      slider.addEventListener('input', () => { value.textContent = labels[Number(slider.value)]; });
+      slider.addEventListener('change', () => call('selectFastQuality', Number(slider.value)));
+      smoothness.appendChild(quality);
+    }
+    body.appendChild(smoothness);
     const speeds = SPEEDS.map(v => ({label: String(v) + '×', enabled: true}));
     const selectedSpeed = Math.max(0, SPEEDS.findIndex(v => Math.abs(v - Number(state.speed || 1)) < 0.001));
     body.appendChild(makeGroup('Speed', 'speed', speeds, selectedSpeed, i => call('speed', SPEEDS[i])));
@@ -298,8 +312,29 @@
     settings = Object.assign({}, settings, next || {});
     const smoothness = button('Smoothness');
     if (smoothness) smoothness.classList.toggle('interp-on', Number(settings.interpolationIndex) > 0);
+    if (Number(settings.interpolationIndex) < 3) {
+      const overlay = q('.frc-diagnostics', player);
+      if (overlay) overlay.hidden = true;
+    }
     const panel = q('.lambda-settings.open');
     if (panel) renderSettings(panel.dataset.focus || 'all');
+  }
+
+  function setFrcDiagnostics(stats) {
+    if (!player) return;
+    let overlay = q('.frc-diagnostics', player);
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'frc-diagnostics';
+      player.appendChild(overlay);
+    }
+    const active = !!stats?.enabled && Number(settings.interpolationIndex) >= 3;
+    overlay.hidden = !active;
+    if (!active) return;
+    const fps = n => Math.round(Number(n) || 0);
+    const profile = stats.genericMotion === 'RIFE reusable midpoint flow'
+      ? ` · ${['Stable','Balanced','Maximum'][Number(stats.effectiveFastQuality) || 0] || 'Balanced'}` : '';
+    overlay.textContent = `FRC  generated ${fps(stats.generatedPerSec)}  Qt swaps ${fps(stats.swappedPerSec)} / ${fps(stats.outputRate)} fps · drops ${fps(stats.droppedPerSec)}/s · repeats ${fps(stats.repeatedSwapsPerSec)}/s · latency p95 ${fps(stats.sourceToSwapP95Ms)} ms${profile}`;
   }
 
   // ---- Bindings -------------------------------------------------------------
@@ -436,6 +471,7 @@
   window.lambdaUi = {
     setState,
     setSettings,
+    setFrcDiagnostics,
     reportVideoRect,
     closeSettings,
     settingsOpen: () => !!q('.lambda-settings.open'),

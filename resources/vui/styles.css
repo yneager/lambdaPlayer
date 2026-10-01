@@ -142,3 +142,9 @@ html.is-mini .player:not(:hover) .control-deck{transform:translateY(8px)}
 .lambda-settings[data-focus="picture"] .lambda-group:not([data-group="picture"]){display:none}
 .icon-button.interp-on{color:var(--cyan-2)}
 .lambda-settings[data-focus] .lambda-group>h4{display:none}
+.lambda-fast-quality{display:grid;gap:8px;margin:13px 2px 3px;padding:12px;border:1px solid rgba(120,245,231,.16);border-radius:13px;background:rgba(120,245,231,.045);color:rgba(245,247,251,.76);font-size:11px}
+.lambda-fast-quality span{display:flex;justify-content:space-between;gap:12px}
+.lambda-fast-quality strong{color:var(--cyan-2);font-weight:700}
+.lambda-fast-quality input{width:100%;accent-color:#78f5e7;cursor:pointer}
+.frc-diagnostics{position:absolute;z-index:31;top:76px;right:16px;max-width:calc(100% - 32px);padding:6px 9px;border:1px solid rgba(120,245,231,.18);border-radius:9px;background:rgba(5,8,13,.74);color:rgba(230,255,250,.85);font:600 10px/1.4 Inter,system-ui,sans-serif;letter-spacing:.01em;pointer-events:none;font-variant-numeric:tabular-nums}
+.frc-diagnostics[hidden]{display:none}

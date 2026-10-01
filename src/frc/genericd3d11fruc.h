@@ -29,12 +29,13 @@ namespace frc {
 class GenericD3D11Fruc final : public FrameInterpolator
 {
 public:
-    enum class Motion { Rife, Block };
+    enum class Motion { Rife, Block, RifeReusable };
 
     // Overrides for tests/benchmarks; call before open()/initialize().
     void setMotion(Motion motion) { motion_ = motion; motionOverridden_ = true; }
     void setModelDirectory(const QString &directory) { modelDirectory_ = directory; }
     void setAnalysisHeight(int height) { analysisHeightOverride_ = height; }
+    void setFastQuality(int quality) { fastQuality_ = quality; }
     Motion motion() const { return motion_; }
     QString modelName() const { return rife_.modelName(); }
     // Benchmark only: synchronous per-stage GPU timestamps.
@@ -63,6 +64,9 @@ public:
     int stages() const override { return initialized_ ? 1 : 0; }
     double lastGpuExecutionMs() const { return lastGpuExecutionMs_.load(); }
     double lastCpuSubmitMs() const { return lastCpuSubmitMs_.load(); }
+    qint64 skippedStaticPairs() const { return skippedStaticPairs_.load(); }
+    qint64 skippedCutPairs() const { return skippedCutPairs_.load(); }
+    qint64 refinedPairs() const { return refinedPairs_.load(); }
 
 private:
     // `texture` belongs to the device passed to open() (OpenGL renders into
@@ -127,7 +131,9 @@ private:
     bool initializeRife(double outputFps, QString *error);
     void runPrepare(ID3D11ShaderResourceView *frame, const RifeD3D11Network::TensorView &tensor);
     void runSceneDiff();
-    void runSynthesize(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current, float t);
+    void packRifeMotion();
+    void runSynthesize(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current, float t,
+                       bool reusable, bool noMotion);
     void bindIo(ID3D11ComputeShader *shader, const void *constants,
                 std::initializer_list<ID3D11ShaderResourceView *> srvs, ID3D11UnorderedAccessView *uav,
                 UINT gx, UINT gy, UINT gz);
@@ -198,6 +204,11 @@ private:
     MotionTexture motionFrameB_;
     MotionTexture rifeMotion_;
     MotionTexture rifeMask_;
+    MotionTexture rifeMotionBackup_;
+    MotionTexture rifeMaskBackup_;
+    Microsoft::WRL::ComPtr<ID3D11Buffer> sceneReadback_;
+    int fastQuality_ = 1;
+    double sourceBudgetMs_ = 1000.0 / 24.0;
     ID3D11UnorderedAccessView *outputUav_ = nullptr;  // current ring slot
     std::vector<std::shared_ptr<InputTexture>> inputPool_;
     std::array<GpuTimer, 4> gpuTimers_;
@@ -215,6 +226,9 @@ private:
     bool initialized_ = false;
     std::atomic<double> lastGpuExecutionMs_{0.0};
     std::atomic<double> lastCpuSubmitMs_{0.0};
+    std::atomic<qint64> skippedStaticPairs_{0};
+    std::atomic<qint64> skippedCutPairs_{0};
+    std::atomic<qint64> refinedPairs_{0};
 };
 
 } // namespace frc

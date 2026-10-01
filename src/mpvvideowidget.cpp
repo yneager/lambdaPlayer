@@ -17,6 +17,7 @@ MpvVideoWidget::MpvVideoWidget(QWidget *parent)
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
 
     connect(this, &QOpenGLWidget::frameSwapped, this, [this] {
+        if (frc_) frc_->frameSwapped();
         if (renderContext_) {
             mpv_render_context_report_swap(renderContext_);
         }

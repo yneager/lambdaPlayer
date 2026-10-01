@@ -194,6 +194,10 @@ bool ScreenInterpolationController::probe(QOpenGLContext *context, QString *reas
     if (commonReady) {
         amf_ = std::make_unique<AmfFrcInterpolator>();
         generic_ = std::make_unique<GenericD3D11Fruc>();
+        if (genericMotionExplicit_) generic_->setMotion(genericMotion_);
+        generic_->setFastQuality(effectiveFastQuality_);
+        if (genericMotion_ == GenericD3D11Fruc::Motion::RifeReusable)
+            generic_->setAnalysisHeight(effectiveFastQuality_ == 0 ? 360 : effectiveFastQuality_ == 2 ? 720 : 540);
         amfAvailable_ = probeBackend(amf_.get(), &amfUnavailableReason_);
         genericAvailable_ = probeBackend(generic_.get(), &genericUnavailableReason_);
         if (!amfAvailable_ && !genericAvailable_ && interop_) interop_->close();
@@ -237,6 +241,46 @@ void ScreenInterpolationController::setBackend(Backend backend)
     emit repaintRequested();
 }
 
+void ScreenInterpolationController::setGenericMotion(GenericD3D11Fruc::Motion motion)
+{
+    if (genericMotionExplicit_ && genericMotion_ == motion) return;
+    if (enabled_ && backend_ == Backend::GenericD3D11) setEnabled(false);
+    if (motion == GenericD3D11Fruc::Motion::RifeReusable
+        && genericMotion_ != GenericD3D11Fruc::Motion::RifeReusable) {
+        effectiveFastQuality_ = fastQuality_;
+        fastOverloadSeconds_ = fastRecoverySeconds_ = 0;
+        fastRateScale_ = 1.0;
+        fastRateLowSeconds_ = fastRateRecoverySeconds_ = 0;
+    }
+    genericMotion_ = motion;
+    genericMotionExplicit_ = true;
+    if (generic_) {
+        generic_->setMotion(motion);
+        generic_->setFastQuality(effectiveFastQuality_);
+        generic_->setAnalysisHeight(motion == GenericD3D11Fruc::Motion::RifeReusable
+                                        ? (effectiveFastQuality_ == 0 ? 360 : effectiveFastQuality_ == 2 ? 720 : 540)
+                                        : 0);
+    }
+    configuredSize_ = QSize();
+}
+
+void ScreenInterpolationController::setFastQuality(int quality)
+{
+    quality = std::clamp(quality, 0, 2);
+    if (fastQuality_ == quality) return;
+    const bool restart = enabled_ && backend_ == Backend::GenericD3D11 && generic_
+        && generic_->motion() == GenericD3D11Fruc::Motion::RifeReusable;
+    if (restart) setEnabled(false);
+    fastQuality_ = effectiveFastQuality_ = quality;
+    fastOverloadSeconds_ = fastRecoverySeconds_ = 0;
+    if (generic_ && generic_->motion() == GenericD3D11Fruc::Motion::RifeReusable) {
+        generic_->setFastQuality(quality);
+        generic_->setAnalysisHeight(quality == 0 ? 360 : quality == 2 ? 720 : 540);
+        configuredSize_ = QSize();
+    }
+    if (restart) setEnabled(true);
+}
+
 // ---- enable / lifecycle -------------------------------------------------------------
 
 bool ScreenInterpolationController::setEnabled(bool enabled, QString *error)
@@ -255,12 +299,24 @@ bool ScreenInterpolationController::setEnabled(bool enabled, QString *error)
         counters_ = Counters();
         rates_ = Rates();
         rates_.atNs = nowNs();
+        submitted_.store(0);
+        outputs_.store(0);
+        generated_.store(0);
+        droppedOutputs_.store(0);
+        windowLate_ = 0;
+        overloadedSeconds_ = 0;
         processingSamplesMs_.clear();
         dispatchSamplesMs_.clear();
         timerLateSamplesMs_.clear();
         outputsSeen_ = 0;
         latencyNs_ = 0;
         lagFrames_ = -1;
+        swappedFrames_ = 0;
+        repeatedSwaps_ = 0;
+        lastPaintedTick_ = lastSwappedTick_ = -1;
+        lastSwapNs_ = 0;
+        swapIntervalsMs_.clear();
+        sourceToSwapMs_.clear();
         startWorker();
         statsTimer_.start();
         emit repaintRequested();
@@ -320,6 +376,10 @@ void ScreenInterpolationController::resetTimeline()
     gridNs_ = 0;
     epochValid_ = false;
     shownContent_ = -1.0;
+    lastPaintedTick_ = lastSwappedTick_ = -1;
+    lastSwapNs_ = 0;
+    swapIntervalsMs_.clear();
+    sourceToSwapMs_.clear();
     // Latency is re-measured from fresh samples (seek/pause outliers).
     processingSamplesMs_.clear();
     outputsSeen_ = 0;
@@ -353,13 +413,22 @@ void ScreenInterpolationController::setTargetFps(double fps)
         requestedSize_ = QSize();
     }
     targetFps_ = next;
+    fastRateScale_ = 1.0;
+    fastRateLowSeconds_ = fastRateRecoverySeconds_ = 0;
     emit repaintRequested(); // the next captured frame reconfigures if needed
 }
 
 double ScreenInterpolationController::outputRate() const
 {
     const double source = 1e9 / sourceIntervalNs();
-    return targetFps_ > 0 ? targetFps_ : source * 2.0;
+    const double requested = targetFps_ > 0 ? targetFps_ : source * 2.0;
+    if (backend_ == Backend::GenericD3D11 && generic_
+        && generic_->motion() == GenericD3D11Fruc::Motion::RifeReusable) {
+        const QScreen *screen = QGuiApplication::primaryScreen();
+        const double refresh = screen && screen->refreshRate() >= 30.0 ? screen->refreshRate() : requested;
+        return std::max(source, std::min(requested, refresh) * fastRateScale_);
+    }
+    return requested;
 }
 
 int ScreenInterpolationController::stagesNeeded() const
@@ -464,6 +533,10 @@ bool ScreenInterpolationController::captureFrame(QOpenGLContext *context, const 
 {
     if (!enabled_ || paused_ || widgetPhysicalSize.isEmpty()) return false;
     widgetSize_ = widgetPhysicalSize;
+    // The web chrome can report its final rectangle after the first decoded
+    // frame. A temporary Qt minimum (100x30) must not scale a 4K source into
+    // a pathological 7200x2160 FRC surface before the layout arrives.
+    if (widgetPhysicalSize.width() < 320 || widgetPhysicalSize.height() < 180) return false;
     const QSize physicalSize = inputSizeFor(widgetPhysicalSize);
     devicePixelRatio_ = dpr;
     QString error;
@@ -625,7 +698,24 @@ bool ScreenInterpolationController::paint(unsigned int targetFbo, const QSize &p
     gl->glBindFramebuffer(GL_FRAMEBUFFER, targetFbo);
     interop_->unlock(view);
     pushSample(paintMs_, double(nowNs() - paintStart) / kMs);
+    lastPaintedTick_ = lastPresentedTick_;
     return true;
+}
+
+void ScreenInterpolationController::frameSwapped()
+{
+    if (!enabled_ || paused_ || lastPaintedTick_ < 0) return;
+    if (lastPaintedTick_ <= lastSwappedTick_) {
+        ++repeatedSwaps_;
+        return;
+    }
+    const qint64 now = nowNs();
+    if (lastSwapNs_ > 0) pushSample(swapIntervalsMs_, double(now - lastSwapNs_) / kMs);
+    const qint64 intended = intendedNs(shownContent_);
+    if (intended > 0) pushSample(sourceToSwapMs_, double(now - intended) / kMs);
+    lastSwapNs_ = now;
+    lastSwappedTick_ = lastPaintedTick_;
+    ++swappedFrames_;
 }
 
 // ---- worker -------------------------------------------------------------------------
@@ -701,9 +791,9 @@ void ScreenInterpolationController::workerLoop()
         QString error;
         FrameInterpolator *backend = activeInterpolator();
         const qint64 workStart = clock_.nsecsElapsed();
+        struct ReadyOutput { int slot; double content; qint64 readyNs; int generation; };
+        std::vector<ReadyOutput> readyOutputs;
         const bool ok = backend && backend->processFrame(job.surface, double(job.seq), [&](const InterpolatedFrame &output) {
-            ++outputs_;
-            if (output.content != std::floor(output.content)) ++generated_;
             int slotIndex = -1;
             {
                 std::lock_guard lock(slotMutex_);
@@ -721,13 +811,21 @@ void ScreenInterpolationController::workerLoop()
                 }
                 // One GPU copy per output: FRC's pooled surface -> display slot.
                 deviceContext_->CopyResource(slots_[size_t(slotIndex)].texture, output.frame.texture);
-                deviceContext_->Flush();
             }
             const qint64 readyNs = clock_.nsecsElapsed();
-            QMetaObject::invokeMethod(this, [this, slotIndex, content = output.content, readyNs, g = job.generation] {
-                onOutput(slotIndex, content, readyNs, g);
-            }, Qt::QueuedConnection);
+            ++outputs_;
+            if (output.content != std::floor(output.content)) ++generated_;
+            readyOutputs.push_back({slotIndex, output.content, readyNs, job.generation});
         }, &error);
+        // Submit all output copies together, then publish them to the GUI.
+        // This keeps a queued callback from presenting a texture before its
+        // copy has been submitted and avoids one D3D flush per 240 Hz frame.
+        if (!readyOutputs.empty()) deviceContext_->Flush();
+        for (const ReadyOutput &ready : readyOutputs) {
+            QMetaObject::invokeMethod(this, [this, ready] {
+                onOutput(ready.slot, ready.content, ready.readyNs, ready.generation);
+            }, Qt::QueuedConnection);
+        }
         const double workMs = double(clock_.nsecsElapsed() - workStart) / kMs;
         workerMs_.store(workMs);
         if (workMs > workerMaxMs_.load()) workerMaxMs_.store(workMs);
@@ -888,7 +986,10 @@ void ScreenInterpolationController::schedule()
         return;
     }
     const qint64 waitNs = tickTime(queue_.front().tick) - nowNs();
-    presentTimer_.start(int(std::max<qint64>(0, waitNs / kMs)));
+    // Do not post a chain of zero-delay timers during the fractional part of
+    // a 240 Hz tick. One precise millisecond timer is cheaper and lets Qt
+    // compose the frame already selected for this refresh.
+    presentTimer_.start(waitNs <= 0 ? 0 : int(std::max<qint64>(1, (waitNs + kMs - 1) / kMs)));
 }
 
 void ScreenInterpolationController::presentDue()
@@ -974,30 +1075,94 @@ void ScreenInterpolationController::logStats()
     rates_.outputsPerSec = (outputs - rates_.outputs) / seconds;
     rates_.generatedPerSec = (generated - rates_.generated) / seconds;
     rates_.presentedPerSec = (counters_.presented - rates_.presented) / seconds;
+    rates_.swappedPerSec = (swappedFrames_ - rates_.swapped) / seconds;
+    rates_.repeatedPerSec = (repeatedSwaps_ - rates_.repeated) / seconds;
+    const qint64 droppedOutputCount = droppedOutputs_.load();
+    rates_.droppedPerSec = ((droppedOutputCount - rates_.droppedOutputs)
+        + (counters_.droppedPresentations - rates_.droppedPresentations)) / seconds;
     rates_.captures = counters_.captures;
     rates_.submitted = submitted;
     rates_.outputs = outputs;
     rates_.generated = generated;
     rates_.presented = counters_.presented;
+    rates_.swapped = swappedFrames_;
+    rates_.repeated = repeatedSwaps_;
+    rates_.droppedOutputs = droppedOutputCount;
+    rates_.droppedPresentations = counters_.droppedPresentations;
     rates_.atNs = now;
+    const double peakWorkMs = workerMaxMs_.exchange(0.0);
+    lastWorkerPeakMs_ = peakWorkMs;
 
     // Watchdog: sustained failure to present about twice the source rate
     // returns to native playback (the resolution never changes).
     const bool running = enabled_ && !paused_ && !configuring_ && configuredSize_.isValid() && rates_.capturesPerSec > 5;
     const double expected = outputRate();
-    const bool overloaded = running && (rates_.presentedPerSec < expected * 0.75 || counters_.late > windowLate_ + expected * 0.25);
+    const double displayCeiling = QGuiApplication::primaryScreen()
+        ? QGuiApplication::primaryScreen()->refreshRate() : expected;
+    const double visibleTarget = std::min(expected, displayCeiling);
+    const bool validVideoArea = widgetSize_.width() > 320 && widgetSize_.height() > 180;
+    const bool swappedSlow = validVideoArea && swappedFrames_ > 0 && rates_.swappedPerSec < visibleTarget * 0.65;
+    const bool overloaded = running && (rates_.presentedPerSec < expected * 0.75 || swappedSlow
+        || counters_.late > windowLate_ + expected * 0.25);
     windowLate_ = counters_.late;
     windowPresented_ = 0;
     overloadedSeconds_ = overloaded ? overloadedSeconds_ + 1 : 0;
 
+    // The quality slider is a ceiling: sustained GPU pressure lowers only
+    // the motion-analysis resolution. Recover conservatively to avoid a
+    // reinitialization oscillation during a difficult scene.
+    const bool fast = running && backend_ == Backend::GenericD3D11 && generic_
+        && generic_->motion() == GenericD3D11Fruc::Motion::RifeReusable
+        && widgetSize_.width() > 320 && widgetSize_.height() > 180;
+    if (fast) {
+        const double budgetMs = sourceIntervalNs() / kMs;
+        const bool pressure = peakWorkMs > budgetMs * 0.88
+                           || (swappedFrames_ > 0 && rates_.swappedPerSec < visibleTarget * 0.8);
+        fastOverloadSeconds_ = pressure ? fastOverloadSeconds_ + 1 : 0;
+        fastRecoverySeconds_ = pressure ? 0 : fastRecoverySeconds_ + 1;
+        int nextQuality = effectiveFastQuality_;
+        if (fastOverloadSeconds_ >= 3 && nextQuality > 0) --nextQuality;
+        else if (fastRecoverySeconds_ >= 15 && nextQuality < fastQuality_) ++nextQuality;
+        if (nextQuality != effectiveFastQuality_) {
+            setEnabled(false); // join worker before changing its model geometry
+            effectiveFastQuality_ = nextQuality;
+            fastOverloadSeconds_ = fastRecoverySeconds_ = 0;
+            overloadedSeconds_ = 0;
+            generic_->setAnalysisHeight(nextQuality == 0 ? 360 : nextQuality == 2 ? 720 : 540);
+            generic_->setFastQuality(nextQuality);
+            configuredSize_ = QSize();
+            setEnabled(true);
+        }
+        // Once the cheaper analysis setting is exhausted, reduce the number
+        // of synthesized frames instead of repeatedly overflowing the display
+        // ring. Recover only after an extended period of clean, cheap swaps.
+        const bool presentationPressure = swappedSlow || rates_.droppedPerSec > visibleTarget * 0.1;
+        fastRateLowSeconds_ = effectiveFastQuality_ == 0 && presentationPressure
+            ? fastRateLowSeconds_ + 1 : 0;
+        fastRateRecoverySeconds_ = fastRateScale_ < 1.0
+            && !presentationPressure && rates_.swappedPerSec >= visibleTarget * 0.95
+            && peakWorkMs < budgetMs * 0.65 ? fastRateRecoverySeconds_ + 1 : 0;
+        double nextScale = fastRateScale_;
+        if (fastRateLowSeconds_ >= 3 && nextScale > 0.5) nextScale = 0.5;
+        else if (fastRateRecoverySeconds_ >= 20 && nextScale < 1.0) nextScale = 1.0;
+        if (nextScale != fastRateScale_) {
+            fastRateScale_ = nextScale;
+            fastRateLowSeconds_ = fastRateRecoverySeconds_ = overloadedSeconds_ = 0;
+            configuredSize_ = pendingSize_ = requestedSize_ = QSize();
+            resetTimeline();
+        }
+    } else {
+        fastOverloadSeconds_ = fastRecoverySeconds_ = 0;
+    }
+
     if (!logPath_.isEmpty()) {
         QFile file(logPath_);
-        const auto resetWorkerMax = qScopeGuard([this] { workerMaxMs_.store(0.0); });
         if (file.open(QIODevice::Append)) {
             file.write(QJsonDocument(stats()).toJson(QJsonDocument::Compact) + '\n');
         }
     }
-    if (overloadedSeconds_ >= 4) {
+    emit diagnosticsUpdated(stats());
+    if (overloadedSeconds_ >= (fast ? 8 : 4)) {
         overloadedSeconds_ = 0;
         fail(QStringLiteral("%1 could not keep up (%2 of %3 frames/s presented)")
                  .arg(activeInterpolator() ? activeInterpolator()->name() : QStringLiteral("Frame interpolation"))
@@ -1012,6 +1177,9 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("amdAmfAvailable", amfAvailable_);
     o.insert("genericD3d11Available", genericAvailable_);
     o.insert("backend", activeInterpolator() ? activeInterpolator()->name() : QString());
+    o.insert("fastQuality", fastQuality_);
+    o.insert("effectiveFastQuality", effectiveFastQuality_);
+    o.insert("fastRateScale", fastRateScale_);
     o.insert("unavailableReason", unavailableReason(backend_));
     o.insert("enabled", enabled_);
     o.insert("paused", paused_);
@@ -1032,9 +1200,14 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("genericGpuExecutionMs", generic_ ? generic_->lastGpuExecutionMs() : 0.0);
     o.insert("genericCpuSubmitMs", generic_ ? generic_->lastCpuSubmitMs() : 0.0);
     if (generic_) {
-        const bool rife = generic_->motion() == GenericD3D11Fruc::Motion::Rife;
-        o.insert("genericMotion", rife ? "RIFE flownet" : "block matching");
+        const auto motion = generic_->motion();
+        const bool rife = motion != GenericD3D11Fruc::Motion::Block;
+        o.insert("genericMotion", motion == GenericD3D11Fruc::Motion::RifeReusable
+                                      ? "RIFE reusable midpoint flow" : rife ? "RIFE flownet" : "block matching");
         o.insert("rifeModel", rife ? generic_->modelName() : QString());
+        o.insert("fastStaticPairs", generic_->skippedStaticPairs());
+        o.insert("fastCutPairs", generic_->skippedCutPairs());
+        o.insert("fastRefinedPairs", generic_->refinedPairs());
         o.insert("rifeAnalysisWidth", generic_->analysisSize().width());
         o.insert("rifeAnalysisHeight", generic_->analysisSize().height());
         o.insert("genericSeparateComputeDevice", generic_->separateComputeDevice());
@@ -1065,6 +1238,12 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("outputsPerSec", rates_.outputsPerSec);
     o.insert("generatedPerSec", rates_.generatedPerSec);
     o.insert("presentedPerSec", rates_.presentedPerSec);
+    o.insert("swappedPerSec", rates_.swappedPerSec);
+    o.insert("repeatedSwapsPerSec", rates_.repeatedPerSec);
+    o.insert("droppedPerSec", rates_.droppedPerSec);
+    o.insert("swapIntervalP95Ms", percentile(swapIntervalsMs_, 0.95));
+    o.insert("sourceToSwapP95Ms", percentile(sourceToSwapMs_, 0.95));
+    o.insert("swappedFrames", swappedFrames_);
     o.insert("captures", counters_.captures);
     o.insert("submitted", submitted_.load());
     o.insert("outputs", outputs_.load());
@@ -1083,7 +1262,7 @@ QJsonObject ScreenInterpolationController::stats() const
     o.insert("lastQueryStatus", lastQueryStatus_.load());
     o.insert("processingMs", lastProcessMs_.load());
     o.insert("workerMs", workerMs_.load());
-    o.insert("workerMaxMs", workerMaxMs_.load());
+    o.insert("workerMaxMs", lastWorkerPeakMs_);
     o.insert("targetFps", targetFps_ > 0 ? targetFps_ : outputRate());
     o.insert("outputRate", outputRate());
     o.insert("frcStages", configuredStages_);

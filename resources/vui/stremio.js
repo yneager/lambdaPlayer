@@ -803,8 +803,15 @@
       actions.appendChild(b);
     });
 
-    renderEpisodes(meta);
-    if (guessed && !(meta.videos || []).some(v => v.season !== undefined)) {
+    const savedVideo = details.context.savedVideoId;
+    if (savedVideo) {
+      const saved = (meta.videos || []).find(v => v.id === savedVideo);
+      if (saved && saved.season !== undefined) details.season = saved.season;
+      renderEpisodes(meta);
+      loadStreams(saved || {id: savedVideo, title: meta.name});
+      delete details.context.savedVideoId;
+    } else renderEpisodes(meta);
+    if (!savedVideo && guessed && !(meta.videos || []).some(v => v.season !== undefined)) {
       // Movies and live channels: sources right away (Stremio's guessed stream path).
       loadStreams({id: guessed, title: meta.name});
     }
@@ -1452,5 +1459,7 @@
     });
   }
 
-  window.lambdaStremio = {attach, setLocalState, show};
+  window.lambdaStremio = {attach, setLocalState, show,
+    openSaved(item) { openDetails({id:item.metaId,type:item.type,name:item.title || item.name,poster:item.poster}, {savedVideoId:item.videoId}); }
+  };
 })();

@@ -116,7 +116,8 @@ void packMotion(uint3 id : SV_DispatchThreadID)
 }
 
 // ---- synthesize --------------------------------------------------------------
-// p0 = (output W, H, analysis content W, H), p2.y = scene check enabled,
+// p0 = (output W, H, analysis content W, H), p2.x = reusable midpoint flow,
+// p2.y = scene check enabled, p2.z = static pair or scene cut,
 // f0 = (t, scene threshold). The motion/mask textures cover exactly the
 // analysis content, so the output pixel's own uv addresses them (bilinear,
 // edge clamped) and flow is rescaled from analysis to output pixels.
@@ -140,13 +141,44 @@ void synthesize(uint3 id : SV_DispatchThreadID)
         output[id.xy] = float4(nearer, 1.0);
         return;
     }
+    if (p2.z != 0)
+    {
+        // Near-identical source frames need no motion inference. A hard cut
+        // also uses a real source frame instead of attempting to warp across
+        // unrelated images.
+        const float3 nearer = t < 0.5 ? frameA.Load(int3(id.xy, 0)).rgb : frameB.Load(int3(id.xy, 0)).rgb;
+        output[id.xy] = float4(nearer, 1.0);
+        return;
+    }
     const float2 invSize = 1.0 / float2(size);
     const float2 center = float2(id.xy) + 0.5;
     const float2 uv = center * invSize;
     const float2 toOutput = float2(size) / float2(p0.zw);
-    const float4 flow = motion.SampleLevel(linearClamp, uv, 0);
-    const float mask = maskTexture.SampleLevel(linearClamp, uv, 0);
+    float4 flow = motion.SampleLevel(linearClamp, uv, 0);
+    float mask = maskTexture.SampleLevel(linearClamp, uv, 0);
+    if (p2.x != 0)
+    {
+        // The flow was estimated once at t=0.5. Approximate constant
+        // velocity between source frames, and move the fusion weight toward
+        // the real source frame at either end of the interval.
+        flow.xy *= 2.0 * t;
+        flow.zw *= 2.0 * (1.0 - t);
+        const float nearSource = 2.0 * min(t, 1.0 - t);
+        const float trustMidpoint = nearSource * nearSource * nearSource;
+        mask = t <= 0.5 ? lerp(1.0, mask, trustMidpoint)
+                        : lerp(0.0, mask, trustMidpoint);
+    }
     const float3 a = frameA.SampleLevel(linearClamp, (center + flow.xy * toOutput) * invSize, 0).rgb;
     const float3 b = frameB.SampleLevel(linearClamp, (center + flow.zw * toOutput) * invSize, 0).rgb;
+    if (p2.x != 0 && abs(t - 0.5) > 0.001)
+    {
+        // Midpoint flow is least trustworthy where its two warped source
+        // colors disagree (occlusion or a bad match). In those areas use the
+        // source closer in time instead of showing a translucent duplicate.
+        const float3 delta = abs(a - b);
+        const float disagreement = max(delta.r, max(delta.g, delta.b));
+        const float agreement = 1.0 - smoothstep(0.08, 0.22, disagreement);
+        mask = lerp(t < 0.5 ? 1.0 : 0.0, mask, agreement);
+    }
     output[id.xy] = float4(a * mask + b * (1.0 - mask), 1.0);
 }

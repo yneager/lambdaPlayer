@@ -127,7 +127,7 @@ double psnr(const QImage &a, const QImage &b)
     return mse <= 0.0 ? 99.0 : 10.0 * std::log10(255.0 * 255.0 / mse);
 }
 
-QImage blend(const QImage &a, const QImage &b)
+QImage blend(const QImage &a, const QImage &b, double t = 0.5)
 {
     QImage out(a.size(), QImage::Format_RGB32);
     for (int y = 0; y < a.height(); ++y) {
@@ -135,8 +135,9 @@ QImage blend(const QImage &a, const QImage &b)
         const QRgb *pb = reinterpret_cast<const QRgb *>(b.constScanLine(y));
         QRgb *po = reinterpret_cast<QRgb *>(out.scanLine(y));
         for (int x = 0; x < a.width(); ++x) {
-            po[x] = qRgb((qRed(pa[x]) + qRed(pb[x]) + 1) / 2, (qGreen(pa[x]) + qGreen(pb[x]) + 1) / 2,
-                         (qBlue(pa[x]) + qBlue(pb[x]) + 1) / 2);
+            po[x] = qRgb(qRound(qRed(pa[x]) * (1 - t) + qRed(pb[x]) * t),
+                         qRound(qGreen(pa[x]) * (1 - t) + qGreen(pb[x]) * t),
+                         qRound(qBlue(pa[x]) * (1 - t) + qBlue(pb[x]) * t));
         }
     }
     return out;
@@ -203,19 +204,23 @@ int validate(const QStringList &args)
 
 int interp(const QStringList &args)
 {
-    if (args.size() < 5) return fail(QStringLiteral("interp <rife|block|amf> <A.png> <B.png> <out.png> [options]"));
+    if (args.size() < 5) return fail(QStringLiteral("interp <rife|rife-reuse|block|amf> <A.png> <B.png> <out.png> [options]"));
     const QString backendName = args[1];
     QImage a = QImage(args[2]).convertToFormat(QImage::Format_ARGB32);
     QImage b = QImage(args[3]).convertToFormat(QImage::Format_ARGB32);
     if (a.isNull() || b.isNull() || a.size() != b.size()) return fail(QStringLiteral("cannot read matching A/B images"));
     QString truthPath, model;
     QStringList history;
-    int analysis = 0, repeat = 0;
+    int analysis = 0, repeat = 0, quality = 1;
+    double outputFps = 48.0, targetTime = 0.5;
     for (int i = 5; i + 1 < args.size(); i += 2) {
         if (args[i] == QLatin1String("--truth")) truthPath = args[i + 1];
         else if (args[i] == QLatin1String("--model")) model = args[i + 1];
         else if (args[i] == QLatin1String("--analysis")) analysis = args[i + 1].toInt();
+        else if (args[i] == QLatin1String("--quality")) quality = args[i + 1].toInt();
         else if (args[i] == QLatin1String("--repeat")) repeat = args[i + 1].toInt();
+        else if (args[i] == QLatin1String("--fps")) outputFps = args[i + 1].toDouble();
+        else if (args[i] == QLatin1String("--time")) targetTime = args[i + 1].toDouble();
         else if (args[i] == QLatin1String("--pre")) history = args[i + 1].split(QLatin1Char(','));
     }
     ComPtr<ID3D11Device> device;
@@ -229,16 +234,18 @@ int interp(const QStringList &args)
     } else {
         auto g = std::make_unique<frc::GenericD3D11Fruc>();
         g->setMotion(backendName == QLatin1String("block") ? frc::GenericD3D11Fruc::Motion::Block
-                                                            : frc::GenericD3D11Fruc::Motion::Rife);
+                   : backendName == QLatin1String("rife-reuse") ? frc::GenericD3D11Fruc::Motion::RifeReusable
+                   : frc::GenericD3D11Fruc::Motion::Rife);
         if (!model.isEmpty()) g->setModelDirectory(model);
         if (analysis > 0) g->setAnalysisHeight(analysis);
+        g->setFastQuality(std::clamp(quality, 0, 2));
         generic = g.get();
         backend = std::move(g);
     }
     QString error;
     frc::FrcSettings settings;
     if (!backend->open(device.Get(), &error)) return fail(error);
-    const bool initialized = generic ? generic->initialize(a.width(), a.height(), settings, 1, 24.0, 48.0, &error)
+    const bool initialized = generic ? generic->initialize(a.width(), a.height(), settings, 1, 24.0, outputFps, &error)
                                      : backend->initialize(a.width(), a.height(), settings, 1, &error);
     if (!initialized) return fail(error);
 
@@ -255,7 +262,8 @@ int interp(const QStringList &args)
     QImage result;
     bool wanted = false;
     auto onOutput = [&](const frc::InterpolatedFrame &output) {
-        if (wanted && std::abs(output.content - (base + 0.5)) < 1e-6) result = readTexture(device.Get(), context.Get(), output.frame.texture);
+        if (wanted && std::abs(output.content - (base + targetTime)) < 1e-5)
+            result = readTexture(device.Get(), context.Get(), output.frame.texture);
     };
     // AMF returns the A/B midpoint after a third submission (one frame of lag).
     auto runPair = [&](bool capture) {
@@ -278,11 +286,11 @@ int interp(const QStringList &args)
         return ok;
     };
     if (!runPair(true)) return fail(error);
-    if (result.isNull()) return fail(QStringLiteral("backend produced no t=0.5 frame"));
+    if (result.isNull()) return fail(QStringLiteral("backend produced no frame at the requested time"));
     result.save(args[4]);
 
     std::printf("backend %s", qPrintable(backend->name()));
-    if (generic && generic->motion() == frc::GenericD3D11Fruc::Motion::Rife) {
+    if (generic && generic->motion() != frc::GenericD3D11Fruc::Motion::Block) {
         std::printf("  model %s  analysis %dx%d", qPrintable(generic->modelName()), generic->analysisSize().width(),
                     generic->analysisSize().height());
     }
@@ -292,7 +300,7 @@ int interp(const QStringList &args)
         const QImage ra = a.convertToFormat(QImage::Format_RGB32);
         const QImage rb = b.convertToFormat(QImage::Format_RGB32);
         std::printf("PSNR vs truth: result %.2f dB | blend %.2f dB | repeat A %.2f dB\n", psnr(result, truth),
-                    psnr(blend(ra, rb), truth), psnr(ra, truth));
+                    psnr(blend(ra, rb, targetTime), truth), psnr(ra, truth));
     }
     if (repeat > 0) {
         // Upload both frames first, then time only the interpolating call.
@@ -330,13 +338,18 @@ int interp(const QStringList &args)
         std::printf("interpolation GPU ms (incl. source copy): median %.2f  min %.2f  max %.2f  | CPU submit %.2f ms avg (n=%d)\n",
                     gpu[gpu.size() / 2], gpu.front(), gpu.back(), cpuTotal / repeat, repeat);
     }
+    if (generic && generic->motion() == frc::GenericD3D11Fruc::Motion::RifeReusable)
+        std::printf("fast pairs: static %lld  cuts %lld  refined %lld\n",
+                    static_cast<long long>(generic->skippedStaticPairs()),
+                    static_cast<long long>(generic->skippedCutPairs()),
+                    static_cast<long long>(generic->refinedPairs()));
     backend->close();
     return 0;
 }
 
 // Known-motion triplet: the background pans by (dx, dy) per frame pair, an
 // occluding card crosses fast, thin lines and text move with it. Frames are
-// rendered at t = 0, 0.5, 1 from the same scene description.
+// rendered at several times from the same scene description.
 int synth(const QStringList &args)
 {
     if (args.size() < 5) return fail(QStringLiteral("synth <source.png> <out dir> <dx> <dy>"));
@@ -346,9 +359,10 @@ int synth(const QStringList &args)
     const int marginX = 2 * int(std::ceil(std::abs(dx))) + 4, marginY = 2 * int(std::ceil(std::abs(dy))) + 4;
     const QSize size(source.width() - 2 * marginX, source.height() - 2 * marginY);
     // P2/P1 are history frames (t = -2, -1) for backends that need them.
-    const char *names[] = {"P2.png", "P1.png", "A.png", "truth.png", "B.png"};
-    const double times[] = {-2.0, -1.0, 0.0, 0.5, 1.0};
-    for (int i = 0; i < 5; ++i) {
+    const char *names[] = {"P2.png", "P1.png", "A.png", "truth_010.png", "truth_020.png",
+                           "truth_025.png", "truth.png", "truth_075.png", "truth_080.png", "truth_090.png", "B.png"};
+    const double times[] = {-2.0, -1.0, 0.0, 0.1, 0.2, 0.25, 0.5, 0.75, 0.8, 0.9, 1.0};
+    for (int i = 0; i < 11; ++i) {
         const double t = times[i];
         QImage frame(size, QImage::Format_RGB32);
         QPainter p(&frame);

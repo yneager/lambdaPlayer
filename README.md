@@ -1,10 +1,21 @@
 # LAMBDA Player
 
-**Current version: v0.2.6**
+**Stable version: v0.2.6 · Public test: [v0.2.7-test.1](https://github.com/yneager/lambdaPlayer/releases/tag/v0.2.7-test.1)**
+
+For the new public test, download [LAMBDA-Player-Setup-0.2.7-test.1-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.2.7-test.1/LAMBDA-Player-Setup-0.2.7-test.1-x64.exe). This single file installs the complete Windows x64 app with its dependencies.
 
 LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. It is also a Stremio add-on client: installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player.
 
 ## Version History
+
+### v0.2.7-test.1 — Library, resume, installer, and lambda icon
+
+- Import a movie/series folder into Your library, including episodes inside season subfolders. Artwork is looked up by title and cached; incorrect matches can be corrected.
+- Save local and online episode progress across restarts. Online Continue Watching reopens the saved episode's sources and resumes after choosing an available stream.
+- Windows installer with all runtimes included, default-player registration, and lambda icons for Explorer, installed shortcuts, and the taskbar.
+- Experimental Fast RIFE motion reuse, adaptive pacing, and reduced work for static frames and scene cuts. Hardware-dependent; stable 4K/240 fps is not guaranteed.
+- [Release notes and test instructions](docs/releases/v0.2.7-test.1.md).
+
 
 ### v0.2.6 — UI and interpolation improvements
 

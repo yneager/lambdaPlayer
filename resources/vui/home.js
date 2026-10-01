@@ -1,6 +1,8 @@
 // LAMBDA Player Home page behaviour.
 (() => {
   let home = null;
+  let library = null;
+  let localItems = [];
   let recents = [];
   let session = {available: false, name: ''};
   const q = (s, root=document) => root.querySelector(s);
@@ -46,7 +48,7 @@
       }));
       rail.appendChild(makeCard({
         title: 'Play a whole folder', meta: 'Next plays the following video automatically',
-        badge: 'FOLDER', progress: 0, theme: THEMES[1], onOpen: () => call('openFolder'),
+        badge: 'FOLDER', progress: 0, theme: THEMES[1], onOpen: () => library && library.chooseFolder(),
         tooltip: 'Choose a folder of videos'
       }));
     } else {
@@ -58,7 +60,7 @@
         rail.appendChild(makeCard({
           title: item.name, meta, badge: current ? 'NOW' : (item.ext || 'VIDEO'),
           progress: item.watched ? 1 : item.progress, theme: THEMES[index % THEMES.length],
-          onOpen: () => current ? call('resume') : call('openRecent', item.path),
+          onOpen: () => current ? call('resume') : item.online ? window.lambdaStremio.openSaved(item) : call('openRecent', item.path),
           tooltip: item.path
         }));
       });
@@ -75,6 +77,39 @@
     if (window.lambdaStremio) window.lambdaStremio.setLocalState(session, recents);
   }
 
+  function renderLibrary(items) {
+    localItems = Array.isArray(items) ? items : [];
+    const rail = q('.local-library-rail');
+    rail.replaceChildren();
+    localItems.forEach(item => {
+      const card = document.createElement('button');
+      card.type = 'button'; card.className = 'local-card';
+      if (item.poster) { const image = document.createElement('img'); image.src = item.poster; image.alt = ''; image.loading = 'lazy'; card.appendChild(image); }
+      const title = document.createElement('strong'); title.textContent = item.title; card.appendChild(title);
+      const count = document.createElement('small'); count.textContent = item.type === 'movie' ? 'Movie' : item.episodes.length + ' episodes'; card.appendChild(count);
+      card.addEventListener('click', () => library.state(items => { const fresh = items.find(i => i.folder === item.folder); if (fresh) openLocal(fresh); })); rail.appendChild(card);
+    });
+    q('.local-library-empty').hidden = localItems.length > 0;
+  }
+  function openLocal(item) {
+    const dialog = q('#local-details');
+    q('h2', dialog).textContent = item.title;
+    const poster = q('img', dialog); poster.hidden = !item.poster; poster.src = item.poster || '';
+    q('[data-local-art]', dialog).onclick = () => library.matchArtwork(item.folder);
+    q('[data-local-refresh]', dialog).onclick = () => { library.refresh(item.folder); dialog.close(); };
+    q('[data-local-remove]', dialog).onclick = () => { library.remove(item.folder); dialog.close(); };
+    const list = q('.local-episodes', dialog); list.replaceChildren();
+    item.episodes.forEach(e => {
+      const row = document.createElement('button'); row.type = 'button'; row.className = 'local-episode';
+      const title = document.createElement('strong'); title.textContent = e.season !== undefined ? 'S' + e.season + ' · E' + e.episode + ' — ' + e.name : e.name;
+      const info = document.createElement('small'); info.textContent = e.watched ? 'Watched · Play again' : e.position > 0 ? 'Resume at ' + Math.floor(e.position / 60) + ':' + String(Math.floor(e.position % 60)).padStart(2, '0') : e.relative;
+      row.append(title, info);
+      row.onclick = () => { dialog.close(); library.play(item.folder, e.path); };
+      list.appendChild(row);
+    });
+    if (!dialog.open) dialog.showModal();
+    dialog.scrollTop = 0;
+  }
   // ---- About popover --------------------------------------------------------
   function ensureAbout() {
     let pop = q('.lambda-popover');
@@ -114,7 +149,7 @@
       e.preventDefault();
       const action = el.dataset.action;
       if (action === 'open') call('openVideo');
-      else if (action === 'folder') call('openFolder');
+      else if (action === 'folder') library && library.chooseFolder();
       else if (action === 'resume') call('resume');
       else if (action === 'addons-view' && window.lambdaStremio) window.lambdaStremio.show('addons');
       else if (action === 'about') aboutOpen() ? closeAbout() : openAbout();
@@ -211,6 +246,7 @@
   }
 
   window.lambdaHome = {
+    openOnline(item) { if (window.lambdaStremio) window.lambdaStremio.openSaved(item); },
     setRecents(list) { recents = Array.isArray(list) ? list : []; renderRecents(); renderHeroCta(); },
     setSession(next) { session = Object.assign({available: false, name: '', path: ''}, next || {}); renderRecents(); renderHeroCta(); },
     toast: (message, kind) => window.LambdaWindow && window.LambdaWindow.toast(message, kind)
@@ -218,11 +254,16 @@
 
   const start = () => {
     bind();
+    q('[data-library-add]').onclick = () => library && library.chooseFolder();
+    q('[data-local-close]').onclick = () => q('#local-details').close();
+    q('#local-details').addEventListener('click', e => { if (e.target === e.currentTarget) e.currentTarget.close(); });
     smoothWheel();
     renderRecents();
     renderHeroCta();
     new QWebChannel(qt.webChannelTransport, channel => {
       home = channel.objects.homeBridge;
+      library = channel.objects.library;
+      if (library) { library.changed.connect(renderLibrary); library.state(renderLibrary); }
       if (window.LambdaWindow && channel.objects.windowBridge) window.LambdaWindow.attach(channel.objects.windowBridge);
       if (window.lambdaStremio && channel.objects.stremio) window.lambdaStremio.attach(channel.objects.stremio, home);
       call('ready');

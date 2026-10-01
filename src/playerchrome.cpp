@@ -36,6 +36,7 @@ signals:
     void audioTrackRequested(int index);
     void subtitleTrackRequested(int index);
     void interpolationRequested(int index);
+    void fastQualityRequested(int quality);
     void videoRectRequested(int x, int y, int width, int height, int radius);
     void subtitleInsetRequested(int pixels);
 
@@ -48,6 +49,7 @@ public slots:
     void selectAudio(int index) { emit audioTrackRequested(index); }
     void selectSubtitle(int index) { emit subtitleTrackRequested(index); }
     void selectInterpolation(int index) { emit interpolationRequested(index); }
+    void selectFastQuality(int quality) { emit fastQualityRequested(quality); }
     void reportVideoRect(double x, double y, double width, double height, double radius)
     {
         emit videoRectRequested(qRound(x), qRound(y), qRound(width), qRound(height), qRound(radius));
@@ -188,6 +190,7 @@ PlayerChrome::PlayerChrome(QWidget *parent)
     connect(bridge, &LambdaBridge::audioTrackRequested, this, &PlayerChrome::audioTrackRequested);
     connect(bridge, &LambdaBridge::subtitleTrackRequested, this, &PlayerChrome::subtitleTrackRequested);
     connect(bridge, &LambdaBridge::interpolationRequested, this, &PlayerChrome::interpolationRequested);
+    connect(bridge, &LambdaBridge::fastQualityRequested, this, &PlayerChrome::fastQualityRequested);
     connect(bridge, &LambdaBridge::videoRectRequested, this, &PlayerChrome::videoRectChanged);
     connect(bridge, &LambdaBridge::subtitleInsetRequested, this, &PlayerChrome::subtitleInsetChanged);
 
@@ -206,6 +209,12 @@ void PlayerChrome::setTimeline(double position, double duration) { position_ = p
 void PlayerChrome::setVolume(int volume) { volume_ = qBound(0, volume, 100); pushState(); }
 void PlayerChrome::setSpeed(double speed) { speed_ = speed; pushState(); }
 void PlayerChrome::setQuality(const QString &primary, const QString &secondary) { qualityPrimary_ = primary; qualitySecondary_ = secondary; pushState(); }
+void PlayerChrome::setFrcDiagnostics(const QJsonObject &stats)
+{
+    if (!ready_ || !view_) return;
+    const QString json = QString::fromUtf8(QJsonDocument(stats).toJson(QJsonDocument::Compact));
+    runScript(QString("window.lambdaUi&&lambdaUi.setFrcDiagnostics(%1);").arg(json));
+}
 void PlayerChrome::setChapter(const QString &index, const QString &title) { chapterIndex_ = index; chapterTitle_ = title; pushState(); }
 void PlayerChrome::setChromeVisible(bool visible) { if (chromeVisible_ == visible) return; chromeVisible_ = visible; pushState(); }
 void PlayerChrome::setLoading(bool loading) { loading_ = loading; pushState(); }
@@ -237,7 +246,7 @@ void PlayerChrome::playEnterAnimation() { runScript("window.LambdaWindow&&Lambda
 void PlayerChrome::setSettings(const QStringList &audio, int audioIndex,
                                const QStringList &subtitles, int subtitleIndex,
                                const QStringList &interpolation, const QList<bool> &interpolationEnabled,
-                               int interpolationIndex, const QStringList &subtitleGroups)
+                               int interpolationIndex, const QStringList &subtitleGroups, int fastQuality)
 {
     audio_ = audio;
     subtitles_ = subtitles;
@@ -247,6 +256,7 @@ void PlayerChrome::setSettings(const QStringList &audio, int audioIndex,
     audioIndex_ = audioIndex;
     subtitleIndex_ = subtitleIndex;
     interpolationIndex_ = interpolationIndex;
+    fastQuality_ = qBound(0, fastQuality, 2);
     pushSettings();
 }
 
@@ -338,6 +348,7 @@ void PlayerChrome::pushSettings()
     settings.insert("audioIndex", audioIndex_);
     settings.insert("subtitleIndex", subtitleIndex_);
     settings.insert("interpolationIndex", interpolationIndex_);
+    settings.insert("fastQuality", fastQuality_);
     const QString json = QString::fromUtf8(QJsonDocument(settings).toJson(QJsonDocument::Compact));
     view_->page()->runJavaScript(QString("window.lambdaUi&&window.lambdaUi.setSettings(%1);").arg(json));
 }

@@ -70,6 +70,9 @@ public:
     bool setEnabled(bool enabled, QString *error = nullptr);
     bool isEnabled() const { return enabled_; }
     void setBackend(Backend backend);
+    void setGenericMotion(GenericD3D11Fruc::Motion motion);
+    void setFastQuality(int quality);
+    int fastQuality() const { return fastQuality_; }
     Backend backend() const { return backend_; }
 
     // Playback state from MainWindow.
@@ -94,6 +97,9 @@ public:
                       const std::function<void(unsigned int fbo, int width, int height)> &render);
     // Draws the frame due now into `targetFbo`. False = draw normally.
     bool paint(unsigned int targetFbo, const QSize &physicalSize);
+    // Called after Qt has swapped the composited video frame, rather than
+    // when an output was merely selected by the presentation timer.
+    void frameSwapped();
     // Must run with the GL context current before it is destroyed.
     void releaseGl();
 
@@ -103,6 +109,7 @@ signals:
     void repaintRequested();
     // The backend stopped itself; playback continues without interpolation.
     void failed(const QString &reason);
+    void diagnosticsUpdated(const QJsonObject &stats);
 
 private:
     struct Slot
@@ -167,6 +174,15 @@ private:
     QString adapterName_;
     std::unique_ptr<AmfFrcInterpolator> amf_;
     std::unique_ptr<GenericD3D11Fruc> generic_;
+    GenericD3D11Fruc::Motion genericMotion_ = GenericD3D11Fruc::Motion::Rife;
+    bool genericMotionExplicit_ = false;
+    int fastQuality_ = 1; // 0 stable, 1 balanced, 2 maximum smoothness
+    int effectiveFastQuality_ = 1;
+    int fastOverloadSeconds_ = 0;
+    int fastRecoverySeconds_ = 0;
+    double fastRateScale_ = 1.0;
+    int fastRateLowSeconds_ = 0;
+    int fastRateRecoverySeconds_ = 0;
     std::unique_ptr<WglDxInterop> interop_;
     QOpenGLContext *glContext_ = nullptr;
 
@@ -229,6 +245,13 @@ private:
     double pendingContentPerTick_ = 0.0;
     double tickPeriodNs_ = 1e9 / 48.0;
     qint64 lastPresentedTick_ = -1;
+    qint64 lastPaintedTick_ = -1;
+    qint64 lastSwappedTick_ = -1;
+    qint64 swappedFrames_ = 0;
+    qint64 repeatedSwaps_ = 0;
+    qint64 lastSwapNs_ = 0;
+    std::vector<double> swapIntervalsMs_;
+    std::vector<double> sourceToSwapMs_;
     double shownContent_ = -1.0;
     // L: content -> presentation latency (measured arrival p95 + margin).
     double latencyNs_ = 0.0;
@@ -276,13 +299,16 @@ private:
     // the maximum is reset by logStats().
     std::atomic<double> workerMs_{0.0};
     std::atomic<double> workerMaxMs_{0.0};
+    double lastWorkerPeakMs_ = 0.0;
     double lastLagMs_ = 0.0;
     qint64 lagFrames_ = -1;
     struct Rates
     {
-        qint64 captures = 0, submitted = 0, outputs = 0, generated = 0, presented = 0;
+        qint64 captures = 0, submitted = 0, outputs = 0, generated = 0, presented = 0, swapped = 0, repeated = 0;
+        qint64 droppedOutputs = 0, droppedPresentations = 0;
         qint64 atNs = 0;
-        double capturesPerSec = 0, submittedPerSec = 0, outputsPerSec = 0, generatedPerSec = 0, presentedPerSec = 0;
+        double capturesPerSec = 0, submittedPerSec = 0, outputsPerSec = 0, generatedPerSec = 0, presentedPerSec = 0, swappedPerSec = 0;
+        double droppedPerSec = 0, repeatedPerSec = 0;
     };
     Rates rates_;
     QTimer statsTimer_;

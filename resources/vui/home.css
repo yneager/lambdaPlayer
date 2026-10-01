@@ -58,3 +58,12 @@ html.is-maximized .nav-shell{padding-top:14px}
 @media(max-width:900px){.nav{gap:18px}.nav-links{gap:16px}}
 @media(max-width:760px){.nav-links a:nth-child(3),.nav-links a:nth-child(4){display:none}}
 @media(max-height:700px){.hero{min-height:560px}.hero-content{padding-top:150px}.hero h1{font-size:clamp(44px,5.4vw,80px)}}
+
+/* Local library: compositor-friendly card motion and native accessible dialog. */
+.local-library-rail{display:flex;flex-wrap:wrap;gap:24px;padding:20px 0}
+.local-card{position:relative;width:180px;height:280px;border:1px solid #ffffff20;border-radius:20px;background:linear-gradient(140deg,#263e49,#111420);color:#fff;overflow:hidden;text-align:left;cursor:pointer;transform-origin:center;transition:transform .45s cubic-bezier(.2,.8,.2,1),box-shadow .45s;}
+.local-card:hover{transform:scale(1.08);z-index:2;box-shadow:0 18px 50px #0008}
+.local-card img{width:100%;height:100%;object-fit:cover;position:absolute;inset:0}
+.local-card::after{content:"";position:absolute;inset:40% 0 0;background:linear-gradient(transparent,#000d)}
+.local-card strong,.local-card small{position:absolute;left:14px;right:14px;bottom:40px;z-index:1}.local-card small{bottom:18px;color:#ddd}
+.local-library-empty{color:#aab5c5}.local-details{color:#f7f8fb;background:#10151e;border:1px solid #ffffff25;border-radius:24px;width:min(880px,90vw);max-height:85vh;padding:32px;box-shadow:0 30px 100px #000b;animation:local-arrive .4s ease-out}.local-details::backdrop{background:#000b}.local-close{float:right}.local-heading{display:flex;gap:28px;margin:30px 0}.local-heading img{width:160px;object-fit:cover;border-radius:16px}.local-heading h2{font-size:32px}.local-actions{display:flex;gap:8px;flex-wrap:wrap}.local-episodes{display:grid;gap:10px}.local-episode{display:flex;flex-direction:column;gap:8px;padding:18px;text-align:left;border:1px solid #ffffff16;background:#ffffff06;color:#fff;border-radius:14px;cursor:pointer;transition:background .2s,transform .2s}.local-episode:hover{background:#78f5e718;transform:translateX(4px)}.local-episode small{color:#aab5c5}@keyframes local-arrive{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){.local-card,.local-episode{transition:none}.local-details{animation:none}}
