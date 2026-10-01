@@ -20,6 +20,7 @@ using PfnUnregisterObject = BOOL(WINAPI *)(HANDLE device, HANDLE object);
 using PfnLockObjects = BOOL(WINAPI *)(HANDLE device, GLint count, HANDLE *objects);
 using PfnUnlockObjects = BOOL(WINAPI *)(HANDLE device, GLint count, HANDLE *objects);
 using PfnGetExtensionsString = const char *(WINAPI *)(HDC);
+using PfnGetExtensionsStringExt = const char *(WINAPI *)();
 constexpr GLenum kAccessReadWrite = 0x0001; // WGL_ACCESS_READ_WRITE_NV
 
 struct Api
@@ -61,8 +62,11 @@ bool WglDxInterop::isSupported(QOpenGLContext *context)
 {
     if (!context) return false;
     auto getExtensions = reinterpret_cast<PfnGetExtensionsString>(context->getProcAddress("wglGetExtensionsStringARB"));
-    if (!getExtensions) return false;
-    const char *extensions = getExtensions(wglGetCurrentDC());
+    const char *extensions = getExtensions ? getExtensions(wglGetCurrentDC()) : nullptr;
+    if (!extensions || !std::strstr(extensions, "WGL_NV_DX_interop2")) {
+        auto getExt = reinterpret_cast<PfnGetExtensionsStringExt>(context->getProcAddress("wglGetExtensionsStringEXT"));
+        if (getExt) extensions = getExt();
+    }
     return extensions && std::strstr(extensions, "WGL_NV_DX_interop2") && api().resolve(context);
 }
 
@@ -70,7 +74,9 @@ bool WglDxInterop::open(QOpenGLContext *context, ID3D11Device *device, QString *
 {
     close();
     if (!isSupported(context)) {
-        if (error) *error = QStringLiteral("The OpenGL driver does not support WGL_NV_DX_interop2");
+        const auto *current = QOpenGLContext::currentContext();
+        const QString renderer = current ? QString::fromLatin1(reinterpret_cast<const char *>(context->functions()->glGetString(GL_RENDERER))) : QStringLiteral("no current context");
+        if (error) *error = QStringLiteral("GPU texture sharing is unavailable (%1). In Windows Graphics settings, select High performance for LAMBDA and restart.").arg(renderer);
         return false;
     }
     context_ = context;

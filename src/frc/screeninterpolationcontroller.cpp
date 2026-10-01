@@ -178,7 +178,39 @@ bool ScreenInterpolationController::probe(QOpenGLContext *context, QString *reas
     QString error;
     const bool deviceReady = ensureDevice(&error);
     if (deviceReady) videoProcessorProbe_ = probeD3D11VideoProcessorFrc(device_, deviceContext_);
-    const bool commonReady = deviceReady && ensureGl(context, &error);
+    bool commonReady = deviceReady && ensureGl(context, &error);
+    if (deviceReady && !commonReady && WglDxInterop::isSupported(context)) {
+        // Renderer strings are not stable adapter IDs. Validate actual interop
+        // instead of permanently locking every mode on a mismatched default GPU.
+        IDXGIFactory1 *factory = nullptr;
+        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+            IDXGIAdapter1 *adapter = nullptr;
+            for (UINT i=0; factory->EnumAdapters1(i,&adapter)!=DXGI_ERROR_NOT_FOUND; ++i) {
+                DXGI_ADAPTER_DESC1 desc{}; adapter->GetDesc1(&desc);
+                ID3D11Device *candidate=nullptr; ID3D11DeviceContext *candidateContext=nullptr;
+                const D3D_FEATURE_LEVEL levels[]={D3D_FEATURE_LEVEL_11_1,D3D_FEATURE_LEVEL_11_0};
+                const HRESULT hr = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ? E_FAIL
+                    : D3D11CreateDevice(adapter,D3D_DRIVER_TYPE_UNKNOWN,nullptr,D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                        levels,2,D3D11_SDK_VERSION,&candidate,nullptr,&candidateContext);
+                adapter->Release();
+                QString why;
+                if (SUCCEEDED(hr) && interop_->open(context,candidate,&why)) {
+                    deviceContext_->Release(); device_->Release();
+                    device_=candidate; deviceContext_=candidateContext;
+                    ID3D11Multithread *threads=nullptr;
+                    if (SUCCEEDED(device_->QueryInterface(IID_PPV_ARGS(&threads)))) {
+                        threads->SetMultithreadProtected(TRUE); threads->Release();
+                    }
+                    adapterName_=QString::fromWCharArray(desc.Description);
+                    videoProcessorProbe_=probeD3D11VideoProcessorFrc(device_,deviceContext_);
+                    commonReady=true; error.clear(); break;
+                }
+                if (candidateContext) candidateContext->Release();
+                if (candidate) candidate->Release();
+            }
+            factory->Release();
+        }
+    }
     auto probeBackend = [this](FrameInterpolator *backend, QString *why) {
         if (!backend->open(device_, why)) return false;
         if (!backend->initialize(1280, 720, settings_, 1, why)) return false;
@@ -194,12 +226,20 @@ bool ScreenInterpolationController::probe(QOpenGLContext *context, QString *reas
     if (commonReady) {
         amf_ = std::make_unique<AmfFrcInterpolator>();
         generic_ = std::make_unique<GenericD3D11Fruc>();
-        if (genericMotionExplicit_) generic_->setMotion(genericMotion_);
+        generic_->setMotion(genericMotion_);
         generic_->setFastQuality(effectiveFastQuality_);
         if (genericMotion_ == GenericD3D11Fruc::Motion::RifeReusable)
             generic_->setAnalysisHeight(effectiveFastQuality_ == 0 ? 360 : effectiveFastQuality_ == 2 ? 720 : 540);
         amfAvailable_ = probeBackend(amf_.get(), &amfUnavailableReason_);
         genericAvailable_ = probeBackend(generic_.get(), &genericUnavailableReason_);
+        if (!genericAvailable_) {
+            // Some drivers reject shared NT-handle input textures for WGL.
+            // A single-device path needs neither cross-device sharing nor fences.
+            generic_->close();
+            generic_->setSeparateDevice(false);
+            genericUnavailableReason_.clear();
+            genericAvailable_ = probeBackend(generic_.get(), &genericUnavailableReason_);
+        }
         if (!amfAvailable_ && !genericAvailable_ && interop_) interop_->close();
     } else {
         amfUnavailableReason_ = error;

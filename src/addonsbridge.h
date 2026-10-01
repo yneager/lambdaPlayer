@@ -92,6 +92,7 @@ private:
     QJsonObject streamingServerStatus() const;
 
     StremioBackend *backend_;
+    bool installingDefaults_ = false;
     QPointer<QWidget> dialogParent_;
     QHash<QString, QList<QPointer<QNetworkReply>>> pending_;
     QHash<QString, MetaSession> metaSessions_;

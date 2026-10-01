@@ -260,3 +260,11 @@ main.view[hidden]{display:none!important}
   .addon-controls{grid-column:1 / -1;justify-content:flex-start}
   .empty-card{flex-direction:column;align-items:flex-start}
 }
+
+/* Keep the default installer beside Add-ons without crowding narrow windows. */
+@media(max-width:1000px){
+  .nav{height:auto;min-height:66px;grid-template-columns:auto 1fr;padding:10px 14px;row-gap:8px}
+  .nav-links{justify-content:flex-end;gap:14px}
+  .nav-actions{grid-column:1 / -1;justify-content:flex-end}
+  .page-view{padding-top:166px}
+}

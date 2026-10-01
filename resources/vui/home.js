@@ -122,15 +122,21 @@
       '<div class="pop-head"><span class="brand-mark" aria-hidden="true">λ</span><div><strong>LAMBDA Player</strong><small class="pop-version"></small></div></div>' +
       '<p>Local video player built on libmpv, with optional real-time RIFE frame interpolation on any Vulkan GPU.</p>' +
       '<div class="pop-keys"><span><kbd>Space</kbd> Play / pause</span><span><kbd>←</kbd><kbd>→</kbd> Seek 5 s</span><span><kbd>F</kbd> Fullscreen</span><span><kbd>M</kbd> Mute</span><span><kbd>Ctrl</kbd><kbd>O</kbd> Open</span></div>' +
-      '<div class="pop-actions"><button type="button" class="pop-btn primary" data-pop="open">Open video</button><button type="button" class="pop-btn" data-pop="licenses">Third-party licenses</button></div>';
+      '<p class="pop-update-status" data-update-status></p><label class="pop-test-updates"><input type="checkbox" data-test-updates /> Include test releases</label>' +
+      '<div class="pop-actions"><button type="button" class="pop-btn" data-pop="updates">Check for updates</button><button type="button" class="pop-btn primary" data-pop="update-download" hidden>Download update</button><button type="button" class="pop-btn primary" data-pop="open">Open video</button><button type="button" class="pop-btn" data-pop="licenses">Third-party licenses</button></div>';
     document.body.appendChild(pop);
     q('.pop-version', pop).textContent = 'Version ' + ((home && home.version) || '');
     q('[data-pop="open"]', pop).addEventListener('click', () => { closeAbout(); call('openVideo'); });
+    q('[data-pop="updates"]', pop).addEventListener('click', () => window.LambdaWindow.checkUpdates());
+    q('[data-pop="update-download"]', pop).addEventListener('click', () => { closeAbout(); window.LambdaWindow.downloadUpdate(); });
+    q('[data-test-updates]', pop).addEventListener('change', e => window.LambdaWindow.setTestUpdates(e.target.checked));
+    window.LambdaWindow.refreshUpdates();
     q('[data-pop="licenses"]', pop).addEventListener('click', () => { closeAbout(); call('openLicenses'); });
     return pop;
   }
-  function openAbout() { ensureAbout().classList.add('open'); q('.profile').classList.add('open'); if (window.LambdaWindow) window.LambdaWindow.refresh(); }
+  function openAbout() { document.documentElement.classList.add('lp-about-open'); ensureAbout().classList.add('open'); q('.profile').classList.add('open'); if (window.LambdaWindow) window.LambdaWindow.refresh(); }
   function closeAbout() {
+    document.documentElement.classList.remove('lp-about-open');
     const pop = q('.lambda-popover');
     if (pop) pop.classList.remove('open');
     const profile = q('.profile');

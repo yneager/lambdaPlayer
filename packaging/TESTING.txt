@@ -1,6 +1,6 @@
-LAMBDA Player - friend test build (Windows 10/11 x64)
+LAMBDA Player 0.2.8 (Windows 10/11 x64)
 
-Run LAMBDA-Player-Setup-0.2.7-test.1-x64.exe. It installs for your Windows user,
+Run the LAMBDA-Player-Setup-<version>-x64.exe file. It installs for your Windows user,
 with no separate Qt, Python, mpv, or streaming engine installation needed.
 Alternatively, open "LAMBDA Player\LambdaPlayer.exe" directly.
 
@@ -28,4 +28,31 @@ after restarting, opening a file from Explorer, online episode resume,
 subtitles, fullscreen, scrolling, interpolation, and uninstalling.
 Interpolation throughput depends on your GPU and display refresh rate.
 
-This is the public 0.2.7-test.1 prerelease for testing and feedback.
+This build is intended for testing and feedback.
+
+ONE-CLICK UPDATES
+In an updater-enabled build, click Update inside LAMBDA. It downloads and verifies
+the runtime, then restarts automatically. Your library and playback positions stay
+saved. A failed startup restores the previous version. GitHub hosts files invisibly;
+you do not need an account or to visit a website.
+Older builds without this updater require one installation of this build first.
+
+PLAYER CONTROLS
+Click FPS in the player controls to show/hide the FPS overlay. Qt swaps measure
+presentation activity, including repeated frames; source/filter/target rates
+are labeled separately. Choose Smoothness > Toggle interpolation shortcut to
+record a shortcut with Ctrl or Alt. Clear and save to disable it. Toggling on
+restores the last chosen available interpolation mode.
+
+Click Install default addons beside Add-ons to install Cinemeta, OpenSubtitles
+v3 and Torrentio. Existing configurations are preserved. If all are present,
+the button says All installed. Removing an addon or a failed download makes
+it possible to install only the missing addon on the next click.
+
+INTERPOLATION AND ADDON FIXES
+The top-menu default-addon button stays visible, including when it says All
+installed. Universal modes now use reusable neural flow instead of coarse
+block matching. RIFE x2/60 keep their existing motion settings. Scene-cut
+checks include spatial correspondence for shots with similar colors; genuine
+cuts hold the preceding original frame until the next source timestamp.
+Please retest the movies and exact scene switches that showed artifacts.

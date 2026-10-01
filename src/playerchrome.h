@@ -36,12 +36,14 @@ public:
     void setSpeed(double speed);
     void setQuality(const QString &primary, const QString &secondary);
     void setFrcDiagnostics(const QJsonObject &stats);
+    void setInterpolationShortcut(const QString &shortcut);
     void setChapter(const QString &index, const QString &title);
     void setChromeVisible(bool visible);
     void setSettings(const QStringList &audio, int audioIndex,
                      const QStringList &subtitles, int subtitleIndex,
                      const QStringList &interpolation, const QList<bool> &interpolationEnabled,
-                     int interpolationIndex, const QStringList &subtitleGroups = {}, int fastQuality = 1);
+                     int interpolationIndex, const QStringList &subtitleGroups = {}, int fastQuality = 1,
+                     const QStringList &interpolationReasons = {});
     void setActive(bool active);
 
 signals:
@@ -57,6 +59,7 @@ signals:
     void activityRequested();
     void loadSubtitleRequested();
     void miniRequested();
+    void configureInterpolationShortcutRequested();
     void seekRequested(double ratio);
     void volumeRequested(int value);
     void speedRequested(double value);
@@ -101,11 +104,13 @@ private:
     QString qualitySecondary_ = "ORIGINAL";
     QString chapterIndex_ = "--";
     QString chapterTitle_ = "No chapters";
+    QString interpolationShortcut_;
     QStringList audio_;
     QStringList subtitles_;
     QStringList subtitleGroups_;
     QStringList interpolation_;
     QList<bool> interpolationEnabled_;
+    QStringList interpolationReasons_;
     int audioIndex_ = 0;
     int subtitleIndex_ = 0;
     int interpolationIndex_ = 0;

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
-project(LambdaPlayer VERSION 0.2.7 LANGUAGES CXX)
+project(LambdaPlayer VERSION 0.2.8 LANGUAGES CXX)
+set(LAMBDA_RELEASE_TAG "v${PROJECT_VERSION}" CACHE STRING "Release tag used for update comparison")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,6 +62,8 @@ endif()
 
 qt_add_executable(LambdaPlayer WIN32
   src/main.cpp
+  src/updatechecker.cpp
+  src/updatechecker.h
   src/addonconfigurewindow.cpp
   src/addonconfigurewindow.h
   src/addonsbridge.cpp
@@ -139,12 +142,14 @@ qt_add_resources(LambdaPlayer "frc_shaders"
     resources/frc/generic_motion.hlsl
     resources/frc/generic_cleanup.hlsl
     resources/frc/generic_warp.hlsl
+    resources/frc/generic_scene.hlsl
     resources/frc/generic_copy.hlsl
     resources/frc/rife_ops.hlsl
     resources/frc/rife_io.hlsl
 )
 
 target_compile_definitions(LambdaPlayer PRIVATE LAMBDA_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(LambdaPlayer PRIVATE LAMBDA_RELEASE_TAG="${LAMBDA_RELEASE_TAG}")
 
 if(WIN32)
   enable_language(RC)
@@ -168,12 +173,14 @@ qt_add_resources(LambdaPlayer "branding"
   PREFIX "/branding"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding"
   FILES resources/branding/lambda.ico resources/branding/lambda.svg)
+qt_add_resources(LambdaPlayer "updater" PREFIX "/updater"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/updater" FILES resources/updater/update.ps1)
 
 # FRC compute shaders are compiled at build time with fxc (Windows SDK) and
 # embedded as :/frc/cso/<file>_<entry>.cso. The RIFE kernels take ~25 s to
 # compile, so runtime D3DCompile is only a fallback when fxc is unavailable.
 set(FRC_SHADER_ENTRIES
-  generic_downscale:main generic_motion:main generic_cleanup:main generic_warp:main generic_copy:main
+  generic_scene:main generic_downscale:main generic_motion:main generic_cleanup:main generic_warp:main generic_copy:main
   rife_ops:conv3x3 rife_ops:deconv rife_ops:deconv4x4s2 rife_ops:interp rife_ops:binary
   rife_ops:activation rife_ops:copy rife_ops:pixelShuffle rife_ops:warp
   rife_io:prepare rife_io:sceneDiff rife_io:packMotion rife_io:synthesize
@@ -236,7 +243,8 @@ if(WIN32 AND LAMBDA_BUILD_FRC_BENCH)
       resources/frc/generic_motion.hlsl
       resources/frc/generic_cleanup.hlsl
       resources/frc/generic_warp.hlsl
-      resources/frc/generic_copy.hlsl
+      resources/frc/generic_scene.hlsl
+    resources/frc/generic_copy.hlsl
       resources/frc/rife_ops.hlsl
       resources/frc/rife_io.hlsl
   )
@@ -264,6 +272,22 @@ if(LAMBDA_BUILD_TESTS)
     target_compile_options(tst_locallibrary PRIVATE /utf-8)
   endif()
   add_test(NAME locallibrary COMMAND tst_locallibrary)
+  qt_add_executable(tst_updatechecker tests/tst_updatechecker.cpp src/updatechecker.cpp src/updatechecker.h)
+  target_include_directories(tst_updatechecker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_link_libraries(tst_updatechecker PRIVATE Qt6::Gui Qt6::Network Qt6::Test)
+  target_compile_definitions(tst_updatechecker PRIVATE LAMBDA_UPDATE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/updater/tls")
+  if(MSVC)
+    target_compile_options(tst_updatechecker PRIVATE /utf-8)
+  endif()
+  add_test(NAME updatechecker COMMAND tst_updatechecker)
+  if(WIN32)
+    add_executable(update_probe WIN32 tests/updater/probe.cpp)
+    set_target_properties(update_probe PROPERTIES AUTOMOC OFF MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    add_test(NAME update_transaction COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/updater/run-tests.ps1"
+      -Probe $<TARGET_FILE:update_probe> -Updater "${CMAKE_CURRENT_SOURCE_DIR}/resources/updater/update.ps1"
+      -Root "${CMAKE_CURRENT_BINARY_DIR}/update-transaction-tests")
+  endif()
   set(LAMBDA_TESTS
     addonclient
     addonmanager

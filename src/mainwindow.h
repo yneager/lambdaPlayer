@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QElapsedTimer>
 #include <QMainWindow>
+#include <QKeySequence>
 #include <QRect>
 #include <QSize>
 #include <QString>
@@ -37,6 +38,7 @@ class MpvVideoWidget;
 class QShowEvent;
 class WindowBridge;
 class AddonsBridge;
+class UpdateChecker;
 
 namespace frc {
 class ScreenInterpolationController;
@@ -86,6 +88,8 @@ private slots:
     void audioTrackChanged(int index);
     void subtitleTrackChanged(int index);
     void interpolationModeChanged(int index);
+    void configureInterpolationShortcut();
+    void toggleInterpolation();
     void interpolationDeactivated(const QString &reason);
     void updateInterpolationLabels();
     void toggleSettingsPanel();
@@ -171,10 +175,16 @@ private:
     static QString formatFps(double fps);
 
     mpv_handle *mpv_ = nullptr;
+    UpdateChecker *updates_ = nullptr;
     InterpolationController *interpolation_ = nullptr;
     frc::ScreenInterpolationController *frc_ = nullptr;
     int frcMenuIndex_ = 7; // selected AMD FRC entry
     int fastQuality_ = 1;
+    QKeySequence interpolationShortcut_;
+    int lastInterpolationIndex_ = 3;
+    QJsonObject fpsDiagnostics_;
+    quint64 fpsSwaps_ = 0;
+    QElapsedTimer fpsSample_;
 
     QWidget *appRoot_ = nullptr;
     QStackedWidget *stack_ = nullptr;

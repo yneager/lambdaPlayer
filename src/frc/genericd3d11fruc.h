@@ -33,6 +33,7 @@ public:
 
     // Overrides for tests/benchmarks; call before open()/initialize().
     void setMotion(Motion motion) { motion_ = motion; motionOverridden_ = true; }
+    void setSeparateDevice(bool enabled) { preferSeparateDevice_ = enabled; }
     void setModelDirectory(const QString &directory) { modelDirectory_ = directory; }
     void setAnalysisHeight(int height) { analysisHeightOverride_ = height; }
     void setFastQuality(int quality) { fastQuality_ = quality; }
@@ -130,7 +131,8 @@ private:
     bool loadRife(QString *error);
     bool initializeRife(double outputFps, QString *error);
     void runPrepare(ID3D11ShaderResourceView *frame, const RifeD3D11Network::TensorView &tensor);
-    void runSceneDiff();
+    void runSceneDiff(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current);
+    bool loadScene(QString *error);
     void packRifeMotion();
     void runSynthesize(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current, float t,
                        bool reusable, bool noMotion);
@@ -165,6 +167,7 @@ private:
     UINT64 outputValue_ = 0;
     UINT64 copyValue_ = 0;
     bool separate_ = false;
+    bool preferSeparateDevice_ = true;
     std::vector<OutputSlot> outputs_;
     size_t nextOutput_ = 0;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader> motionShader_;

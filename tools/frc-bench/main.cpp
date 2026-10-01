@@ -212,12 +212,14 @@ int interp(const QStringList &args)
     QString truthPath, model;
     QStringList history;
     int analysis = 0, repeat = 0, quality = 1;
+    bool probeBlock = false;
     double outputFps = 48.0, targetTime = 0.5;
     for (int i = 5; i + 1 < args.size(); i += 2) {
         if (args[i] == QLatin1String("--truth")) truthPath = args[i + 1];
         else if (args[i] == QLatin1String("--model")) model = args[i + 1];
         else if (args[i] == QLatin1String("--analysis")) analysis = args[i + 1].toInt();
         else if (args[i] == QLatin1String("--quality")) quality = args[i + 1].toInt();
+        else if (args[i] == QLatin1String("--probe-block")) probeBlock = args[i + 1].toInt() != 0;
         else if (args[i] == QLatin1String("--repeat")) repeat = args[i + 1].toInt();
         else if (args[i] == QLatin1String("--fps")) outputFps = args[i + 1].toDouble();
         else if (args[i] == QLatin1String("--time")) targetTime = args[i + 1].toDouble();
@@ -244,7 +246,10 @@ int interp(const QStringList &args)
     }
     QString error;
     frc::FrcSettings settings;
+    const auto requestedMotion = generic ? generic->motion() : frc::GenericD3D11Fruc::Motion::Block;
+    if (generic && probeBlock) generic->setMotion(frc::GenericD3D11Fruc::Motion::Block);
     if (!backend->open(device.Get(), &error)) return fail(error);
+    if (generic && probeBlock) generic->setMotion(requestedMotion);
     const bool initialized = generic ? generic->initialize(a.width(), a.height(), settings, 1, 24.0, outputFps, &error)
                                      : backend->initialize(a.width(), a.height(), settings, 1, &error);
     if (!initialized) return fail(error);

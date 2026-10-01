@@ -258,6 +258,14 @@
         b.className = 'lambda-option' + (index === selected ? ' selected' : '');
         b.textContent = item.label || String(item);
         b.disabled = item.enabled === false;
+        if (item.reason) {
+          b.title = item.reason;
+          if (b.disabled) {
+            const reason = document.createElement('small');
+            reason.className = 'lambda-option-reason'; reason.textContent = item.reason;
+            b.appendChild(reason);
+          }
+        }
         b.addEventListener('click', () => onClick(index));
         options.appendChild(b);
       });
@@ -289,6 +297,11 @@
       slider.addEventListener('change', () => call('selectFastQuality', Number(slider.value)));
       smoothness.appendChild(quality);
     }
+    const shortcut = document.createElement('button');
+    shortcut.className = 'lambda-option lambda-action';
+    shortcut.textContent = 'Toggle interpolation shortcut: ' + (settings.interpolationShortcut || 'Set shortcut…');
+    shortcut.addEventListener('click', () => call('action', 'interpolation-shortcut'));
+    smoothness.appendChild(shortcut);
     body.appendChild(smoothness);
     const speeds = SPEEDS.map(v => ({label: String(v) + '×', enabled: true}));
     const selectedSpeed = Math.max(0, SPEEDS.findIndex(v => Math.abs(v - Number(state.speed || 1)) < 0.001));
@@ -312,15 +325,15 @@
     settings = Object.assign({}, settings, next || {});
     const smoothness = button('Smoothness');
     if (smoothness) smoothness.classList.toggle('interp-on', Number(settings.interpolationIndex) > 0);
-    if (Number(settings.interpolationIndex) < 3) {
-      const overlay = q('.frc-diagnostics', player);
-      if (overlay) overlay.hidden = true;
-    }
     const panel = q('.lambda-settings.open');
     if (panel) renderSettings(panel.dataset.focus || 'all');
   }
 
+  let fpsVisible = false;
+  let fpsStats = {};
+  try { fpsVisible = localStorage.getItem('lambda.showFps') === 'true'; } catch (_) {}
   function setFrcDiagnostics(stats) {
+    fpsStats = stats || {};
     if (!player) return;
     let overlay = q('.frc-diagnostics', player);
     if (!overlay) {
@@ -328,13 +341,19 @@
       overlay.className = 'frc-diagnostics';
       player.appendChild(overlay);
     }
-    const active = !!stats?.enabled && Number(settings.interpolationIndex) >= 3;
-    overlay.hidden = !active;
-    if (!active) return;
-    const fps = n => Math.round(Number(n) || 0);
-    const profile = stats.genericMotion === 'RIFE reusable midpoint flow'
-      ? ` · ${['Stable','Balanced','Maximum'][Number(stats.effectiveFastQuality) || 0] || 'Balanced'}` : '';
-    overlay.textContent = `FRC  generated ${fps(stats.generatedPerSec)}  Qt swaps ${fps(stats.swappedPerSec)} / ${fps(stats.outputRate)} fps · drops ${fps(stats.droppedPerSec)}/s · repeats ${fps(stats.repeatedSwapsPerSec)}/s · latency p95 ${fps(stats.sourceToSwapP95Ms)} ms${profile}`;
+    overlay.hidden = !fpsVisible;
+    const toggle = button('Show FPS');
+    if (toggle) {
+      toggle.classList.toggle('active', fpsVisible);
+      toggle.setAttribute('aria-pressed', String(fpsVisible));
+      toggle.title = fpsVisible ? 'Hide FPS' : 'Show FPS';
+    }
+    if (!fpsVisible) return;
+    const fps = n => (Number(n) || 0).toFixed(1);
+    const presentation = stats.paused ? 'Paused' : `${fps(stats.presentationFps)} Qt swaps/s`;
+    overlay.textContent = stats.enabled
+      ? `${presentation} · source ${fps(stats.sourceFps)} fps · target ${fps(stats.outputRate)} fps · generated ${fps(stats.generatedPerSec)}/s · drops ${fps(stats.droppedPerSec)}/s · repeats ${fps(stats.repeatedSwapsPerSec)}/s`
+      : `${presentation} · source ${fps(stats.sourceFps)} fps · video/filter ${fps(stats.filterFps)} fps`;
   }
 
   // ---- Bindings -------------------------------------------------------------
@@ -359,6 +378,13 @@
       b.classList.add('settings-trigger');
       b.addEventListener('click', () => toggleSettings('audio', b));
     });
+    const fpsToggle = button('Show FPS');
+    if (fpsToggle) fpsToggle.addEventListener('click', () => {
+      fpsVisible = !fpsVisible;
+      try { localStorage.setItem('lambda.showFps', String(fpsVisible)); } catch (_) {}
+      setFrcDiagnostics(fpsStats);
+    });
+    setFrcDiagnostics(fpsStats);
     const smoothness = button('Smoothness');
     if (smoothness) {
       smoothness.title = 'Smoothness (frame interpolation)';

@@ -32,8 +32,8 @@ constexpr UINT kSearchRadius = 6;
 // LAMBDA_RIFE_ANALYSIS_HEIGHT overrides it.
 constexpr int kDefaultAnalysisHeight = 720;
 constexpr int kHighRateAnalysisHeight = 540;
-// Mean absolute luma difference that marks a scene cut (the misc.SCDetect
-// threshold used by rife.vpy). LAMBDA_RIFE_SCENE_THRESHOLD overrides it;
+// Broad RGB difference threshold, supplemented by spatial correspondence
+// and dark-shot checks. LAMBDA_RIFE_SCENE_THRESHOLD overrides it;
 // a value <= 0 disables the check.
 constexpr float kDefaultSceneThreshold = 0.1f;
 // Preferred models, first found wins. v4.6 (the VapourSynth path's model) is
@@ -141,7 +141,7 @@ bool GenericD3D11Fruc::open(ID3D11Device *device, QString *error)
     device_ = interopDevice_;
     context_ = interopContext_;
     separate_ = false;
-    if (qEnvironmentVariable("LAMBDA_GENERIC_FRC_SEPARATE_DEVICE") != QLatin1String("0")) {
+    if (preferSeparateDevice_ && qEnvironmentVariable("LAMBDA_GENERIC_FRC_SEPARATE_DEVICE") != QLatin1String("0")) {
         QString why;
         if (!createComputeDevice(&why)) {
             // Shared textures/fences unavailable: fall back to one device.
@@ -155,6 +155,7 @@ bool GenericD3D11Fruc::open(ID3D11Device *device, QString *error)
         || !compileShader(":/frc/generic_motion.hlsl", "main", motionShader_.GetAddressOf(), error)
         || !compileShader(":/frc/generic_cleanup.hlsl", "main", cleanupShader_.GetAddressOf(), error)
         || !compileShader(":/frc/generic_warp.hlsl", "main", warpShader_.GetAddressOf(), error)
+        || !compileShader(":/frc/generic_scene.hlsl", "main", sceneShader_.GetAddressOf(), error)
         || !compileShader(":/frc/generic_copy.hlsl", "main", copyShader_.GetAddressOf(), error)) {
         close();
         return false;
@@ -300,14 +301,8 @@ QString GenericD3D11Fruc::name() const
          : QStringLiteral("Generic D3D11 RIFE");
 }
 
-bool GenericD3D11Fruc::loadRife(QString *error)
+bool GenericD3D11Fruc::loadScene(QString *error)
 {
-    if (!compileShader(":/frc/rife_io.hlsl", "prepare", prepareShader_.GetAddressOf(), error)
-        || !compileShader(":/frc/rife_io.hlsl", "sceneDiff", sceneShader_.GetAddressOf(), error)
-        || !compileShader(":/frc/rife_io.hlsl", "packMotion", packShader_.GetAddressOf(), error)
-        || !compileShader(":/frc/rife_io.hlsl", "synthesize", synthesizeShader_.GetAddressOf(), error)) {
-        return false;
-    }
     D3D11_BUFFER_DESC desc{};
     desc.ByteWidth = sizeof(IoParameters);
     desc.Usage = D3D11_USAGE_DEFAULT;
@@ -315,12 +310,12 @@ bool GenericD3D11Fruc::loadRife(QString *error)
     HRESULT hr = device_->CreateBuffer(&desc, nullptr, &ioConstants_);
     if (SUCCEEDED(hr)) {
         D3D11_BUFFER_DESC scene{};
-        scene.ByteWidth = 4;
+        scene.ByteWidth = 8;
         scene.Usage = D3D11_USAGE_DEFAULT;
         scene.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
         scene.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
         scene.StructureByteStride = 4;
-        const float zero = 0.0f;
+        const float zero[2] = {0.0f, 0.0f};
         D3D11_SUBRESOURCE_DATA data{&zero, 0, 0};
         hr = device_->CreateBuffer(&scene, &data, &sceneBuffer_);
     }
@@ -328,6 +323,16 @@ bool GenericD3D11Fruc::loadRife(QString *error)
     if (SUCCEEDED(hr)) hr = device_->CreateUnorderedAccessView(sceneBuffer_.Get(), nullptr, &sceneUav_);
     if (FAILED(hr)) {
         if (error) *error = hresultText(QStringLiteral("CreateBuffer(RIFE I/O)"), hr);
+        return false;
+    }
+    return true;
+}
+
+bool GenericD3D11Fruc::loadRife(QString *error)
+{
+    if (!compileShader(":/frc/rife_io.hlsl", "prepare", prepareShader_.GetAddressOf(), error)
+        || !compileShader(":/frc/rife_io.hlsl", "packMotion", packShader_.GetAddressOf(), error)
+        || !compileShader(":/frc/rife_io.hlsl", "synthesize", synthesizeShader_.GetAddressOf(), error)) {
         return false;
     }
     if (rifeLoaded_) return true;
@@ -358,6 +363,9 @@ bool GenericD3D11Fruc::loadRife(QString *error)
 
 bool GenericD3D11Fruc::initializeRife(double outputFps, QString *error)
 {
+    // Universal can be probed without models; switching to neural flow loads
+    // its model lazily rather than disabling the cheap backend at startup.
+    if (!loadRife(error)) return false;
     bool ok = false;
     int requested = qEnvironmentVariableIntValue("LAMBDA_RIFE_ANALYSIS_HEIGHT", &ok);
     if (analysisHeightOverride_ > 0) requested = analysisHeightOverride_;
@@ -402,9 +410,9 @@ bool GenericD3D11Fruc::initializeRife(double outputFps, QString *error)
             return false;
         }
     }
-    if (motion_ == Motion::RifeReusable) {
+    {
         D3D11_BUFFER_DESC desc{};
-        desc.ByteWidth = sizeof(float);
+        desc.ByteWidth = 2 * sizeof(float);
         desc.Usage = D3D11_USAGE_STAGING;
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
         const HRESULT hr = device_->CreateBuffer(&desc, nullptr, &sceneReadback_);
@@ -453,18 +461,11 @@ void GenericD3D11Fruc::runPrepare(ID3D11ShaderResourceView *frame, const RifeD3D
     bindIo(prepareShader_.Get(), &k, {frame}, tensor.uav, (paddedWidth_ + 7) / 8, (paddedHeight_ + 7) / 8, 1);
 }
 
-void GenericD3D11Fruc::runSceneDiff()
+void GenericD3D11Fruc::runSceneDiff(ID3D11ShaderResourceView *previous, ID3D11ShaderResourceView *current)
 {
-    const RifeD3D11Network::TensorView a = rife_.input(0);
-    const RifeD3D11Network::TensorView b = rife_.input(1);
     IoParameters k{};
-    k.p[0] = analysisWidth_;
-    k.p[1] = analysisHeight_;
-    k.p[2] = paddedWidth_;
-    k.p[3] = paddedHeight_;
-    k.p[4] = a.offset;
-    k.p[5] = b.offset;
-    bindIo(sceneShader_.Get(), &k, {a.srv, b.srv}, sceneUav_.Get(), 1, 1, 1);
+    k.f[0] = sceneThreshold_;
+    bindIo(sceneShader_.Get(), &k, {previous,current}, sceneUav_.Get(), 1, 1, 1);
 }
 
 void GenericD3D11Fruc::packRifeMotion()
@@ -619,10 +620,11 @@ bool GenericD3D11Fruc::initialize(int width, int height, const FrcSettings &, in
         return false;
     }
 
+    bool thresholdOk = false;
+    const double threshold = qEnvironmentVariable("LAMBDA_RIFE_SCENE_THRESHOLD").toDouble(&thresholdOk);
+    sceneThreshold_ = thresholdOk ? float(threshold) : kDefaultSceneThreshold;
+    if (!loadScene(error)) { terminate(); return false; }
     if (motion_ != Motion::Block) {
-        bool thresholdOk = false;
-        const double threshold = qEnvironmentVariable("LAMBDA_RIFE_SCENE_THRESHOLD").toDouble(&thresholdOk);
-        sceneThreshold_ = thresholdOk ? float(threshold) : kDefaultSceneThreshold;
         if (!initializeRife(validOutputFps, error)) {
             terminate();
             return false;
@@ -809,21 +811,21 @@ bool GenericD3D11Fruc::runWarp(ID3D11ShaderResourceView *previous, ID3D11ShaderR
                                float interpolationTime, QString *error)
 {
     const WarpParameters values{width_, height_, motionWidth_, motionHeight_, kBlockSize,
-                                interpolationTime, 0.0f, 0.0f};
+                                interpolationTime, sceneThreshold_ > 0.0f ? 1.0f : 0.0f, 0.0f};
     updateConstants(context_.Get(), constants_.Get(), values);
-    ID3D11ShaderResourceView *srvs[] = {previous, current, forwardFlow_.srv.Get(), backwardFlow_.srv.Get()};
+    ID3D11ShaderResourceView *srvs[] = {previous, current, forwardFlow_.srv.Get(), backwardFlow_.srv.Get(), sceneSrv_.Get()};
     ID3D11UnorderedAccessView *uavs[] = {outputUav_};
     ID3D11Buffer *constant = constants_.Get();
     ID3D11SamplerState *sampler = linearSampler_.Get();
     context_->CSSetShader(warpShader_.Get(), nullptr, 0);
     context_->CSSetConstantBuffers(0, 1, &constant);
     context_->CSSetSamplers(0, 1, &sampler);
-    context_->CSSetShaderResources(0, 4, srvs);
+    context_->CSSetShaderResources(0, 5, srvs);
     context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
     context_->Dispatch((width_ + 7) / 8, (height_ + 7) / 8, 1);
-    ID3D11ShaderResourceView *nullSrvs[] = {nullptr, nullptr, nullptr, nullptr};
+    ID3D11ShaderResourceView *nullSrvs[] = {nullptr, nullptr, nullptr, nullptr, nullptr};
     ID3D11UnorderedAccessView *nullUavs[] = {nullptr};
-    context_->CSSetShaderResources(0, 4, nullSrvs);
+    context_->CSSetShaderResources(0, 5, nullSrvs);
     context_->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
     Q_UNUSED(error);
     return true;
@@ -935,23 +937,23 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
     const bool rife = motion_ != Motion::Block;
     bool refinePair = false;
     bool skipMotion = false;
+    if (needsMotion) runSceneDiff(previous->srv.Get(), current->srv.Get());
     if (needsMotion && rife) {
         stamp("start");
         runPrepare(previous->srv.Get(), rife_.input(0));
         runPrepare(current->srv.Get(), rife_.input(1));
-        runSceneDiff();
         stamp("prepare+scene");
-        if (motion_ == Motion::RifeReusable && sceneReadback_) {
+        if (sceneReadback_) {
             context_->CopyResource(sceneReadback_.Get(), sceneBuffer_.Get());
             D3D11_MAPPED_SUBRESOURCE mapped{};
             if (SUCCEEDED(context_->Map(sceneReadback_.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
                 const float difference = *static_cast<const float *>(mapped.pData);
                 const bool staticPair = difference < 0.0025f;
-                const bool cutPair = sceneThreshold_ > 0.0f && difference >= sceneThreshold_;
+                const bool cutPair = static_cast<const float *>(mapped.pData)[1] > 0.5f;
                 skipMotion = staticPair || cutPair;
                 if (staticPair) ++skippedStaticPairs_;
                 else if (cutPair) ++skippedCutPairs_;
-                refinePair = !skipMotion && fastQuality_ == 2 && difference > 0.025f
+                refinePair = motion_ == Motion::RifeReusable && !skipMotion && fastQuality_ == 2 && difference > 0.025f
                     && lastGpuExecutionMs_.load() < sourceBudgetMs_ * 0.7;
                 context_->Unmap(sceneReadback_.Get(), 0);
             }
@@ -997,7 +999,7 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
         } else if (rife) {
             // Exact RIFE runs per timestep; fast mode reuses the midpoint
             // flow for every requested output in this source-frame pair.
-            if (motion_ == Motion::Rife) {
+            if (motion_ == Motion::Rife && !skipMotion) {
                 rife_.run(context_.Get(), float(localTime));
                 stamp("network");
                 packRifeMotion();

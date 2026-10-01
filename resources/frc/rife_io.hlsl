@@ -134,10 +134,10 @@ void synthesize(uint3 id : SV_DispatchThreadID)
     const uint2 size = p0.xy;
     if (id.x >= size.x || id.y >= size.y) return;
     const float t = f0.x;
-    if (p2.y != 0 && sceneBuffer[0] > f0.y)
+    if (p2.y != 0 && sceneBuffer[1] > 0.5)
     {
-        // Scene cut: never blend unrelated pictures; show the nearer frame.
-        const float3 nearer = t < 0.5 ? frameA.Load(int3(id.xy, 0)).rgb : frameB.Load(int3(id.xy, 0)).rgb;
+        // Scene cut: retain the preceding shot until the next source timestamp.
+        const float3 nearer = frameA.Load(int3(id.xy, 0)).rgb;
         output[id.xy] = float4(nearer, 1.0);
         return;
     }

@@ -148,3 +148,7 @@ html.is-mini .player:not(:hover) .control-deck{transform:translateY(8px)}
 .lambda-fast-quality input{width:100%;accent-color:#78f5e7;cursor:pointer}
 .frc-diagnostics{position:absolute;z-index:31;top:76px;right:16px;max-width:calc(100% - 32px);padding:6px 9px;border:1px solid rgba(120,245,231,.18);border-radius:9px;background:rgba(5,8,13,.74);color:rgba(230,255,250,.85);font:600 10px/1.4 Inter,system-ui,sans-serif;letter-spacing:.01em;pointer-events:none;font-variant-numeric:tabular-nums}
 .frc-diagnostics[hidden]{display:none}
+
+.lambda-option-reason{display:block;max-width:300px;font-size:9px;line-height:1.5;margin:5px 0;white-space:normal;text-align:left}.lambda-option:disabled:has(.lambda-option-reason){opacity:.65}
+
+.fps-button{font-size:10px;font-weight:700;letter-spacing:.03em}.fps-button.active{color:#78f5e7;background:#78f5e720}.frc-diagnostics[hidden]{display:none!important}

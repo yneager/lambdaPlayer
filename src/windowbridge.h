@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QJsonObject>
 #include <QObject>
 #include <QRectF>
 #include <QVariantList>
@@ -18,6 +19,7 @@ class WindowBridge final : public QObject
     Q_PROPERTY(bool maximized READ isMaximized NOTIFY stateChanged)
     Q_PROPERTY(bool fullscreen READ isFullscreen NOTIFY stateChanged)
     Q_PROPERTY(bool mini READ isMini NOTIFY stateChanged)
+    Q_PROPERTY(QJsonObject update READ updateState NOTIFY updateChanged)
 
 public:
     explicit WindowBridge(QObject *parent = nullptr);
@@ -25,6 +27,8 @@ public:
     bool isMaximized() const { return maximized_; }
     bool isFullscreen() const { return fullscreen_; }
     bool isMini() const { return mini_; }
+    QJsonObject updateState() const { return update_; }
+    void setUpdateState(const QJsonObject &state) { update_ = state; emit updateChanged(); }
 
     void setWindowState(bool maximized, bool fullscreen, bool mini);
 
@@ -35,10 +39,23 @@ public slots:
     void minimize() { emit minimizeRequested(); }
     void toggleMaximize() { emit toggleMaximizeRequested(); }
     void close() { emit closeRequested(); }
+    void checkUpdates() { emit updateCheckRequested(); }
+    void downloadUpdate() { emit updateDownloadRequested(); }
+    void cancelUpdate() { emit updateCancelRequested(); }
+    void dismissUpdate() { emit updateDismissRequested(); }
+    void updateReleaseNotes() { emit updateNotesRequested(); }
+    void setTestUpdates(bool enabled) { emit testUpdatesRequested(enabled); }
     void setDragRegions(const QVariantList &drag, const QVariantList &holes);
 
 signals:
     void stateChanged();
+    void updateChanged();
+    void updateCheckRequested();
+    void updateDownloadRequested();
+    void updateCancelRequested();
+    void updateDismissRequested();
+    void updateNotesRequested();
+    void testUpdatesRequested(bool enabled);
     void minimizeRequested();
     void toggleMaximizeRequested();
     void closeRequested();
@@ -47,6 +64,7 @@ private:
     static QList<QRectF> toRects(const QVariantList &list);
 
     QList<QRectF> drag_;
+    QJsonObject update_;
     QList<QRectF> holes_;
     bool maximized_ = false;
     bool fullscreen_ = false;

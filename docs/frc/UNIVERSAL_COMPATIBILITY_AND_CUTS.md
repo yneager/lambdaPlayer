@@ -1,0 +1,21 @@
+# Universal compatibility and scene transitions
+
+The test.6 build routes all Universal choices through reusable neural RIFE motion, using the same full-resolution synthesis as the normal RIFE double/60 modes. The coarse block-matching option used by test.4/test.5 produced visible motion artifacts and is no longer selected by the UI. The backend is still probed independently of model loading; neural models are loaded on demand. Bundled models are required for the active neural path.
+
+The normal RIFE double/60 choices now use post-render reusable RIFE flow when the GPU backend is available. Balanced analysis is 540 lines, with automatic pressure adaptation to 360 lines and a quality ceiling of 720. The 240 fps Fast RIFE option uses the same reuse path. The original VapourSynth path remains the fallback when post-render GPU texture sharing is unavailable. Enabling the plugin UHD flag alone did not improve the measured v4.6 4K test, so that change was not retained.
+
+Compatibility changes include probing Universal independently of RIFE models, loading neural models on demand, retrying the single-device path when shared textures/fences fail, validating other hardware adapters if the default adapter cannot interoperate with the OpenGL renderer, discrete-GPU preference exports for hybrid laptops, and both WGL extension-string query variants. A successful probe still requires genuine driver support for OpenGL/D3D11 sharing; the code does not force an unsupported mode to appear enabled.
+
+Disabled options now show their reason in the player settings, as well as a tooltip. The renderer name and a Windows high-performance graphics instruction are included when texture-sharing support is missing. This is necessary because the friend's old UI did not reveal the cause. RTX 5080 behavior has not been directly measured; these changes need confirmation on that PC.
+
+A shared GPU scene detector samples both original RGB frames at a fixed 64x36 footprint. It checks absolute color change and broad relative change in dark shots, rather than only luma. It also compares 144 spatial patches against nearby translated patches, measuring unmatched detail rather than color alone; this catches tested cuts with the same palette. Both block and neural synthesis suppress warping/blending at detected cuts. The preceding shot remains visible until the next actual source timestamp. Neural inference is skipped for detected cuts and near-static pairs. Heuristic cut detection can still miss subtle edits or conservatively suppress interpolation during very abrupt motion.
+
+## Validation
+
+The application and existing Qt tests build and pass. `tests/frc-scene-cuts.ps1` tests bright, dark, similarly bright color cuts and same-palette structural cuts at 3840x2160, checking exact source pixels and unchanged output dimensions at output rates of 48, 60 and 240 fps, including the exact incoming source boundary for block, reusable RIFE and exact RIFE. It accepts a bench path and an optional model path. The single-device path was also tested in the GPU bench and the application successfully probed Universal with separate-device sharing disabled.
+
+On the local RX 9070 XT, a 3640x2104 known-motion pair requested at 24->240 fps measured roughly 93 ms for per-output RIFE, 18 ms for reusable RIFE, and 3.7 ms for block motion. These are short offline pair timings, not sustained playback FPS or RTX 5080 results. The scene's midpoint PSNR was 25.08 dB for neural flow versus 20.41 dB for block motion (plain blending: 20.70 dB), demonstrating the performance/accuracy tradeoff. The tested single-device block path measured about 3.4 ms; its CPU submission timing does not include GPU completion.
+
+These fixes are included in [v0.2.8](../releases/v0.2.8.md), with installer `LAMBDA-Player-Setup-0.2.8-x64.exe`. Send the complete Setup EXE, which includes the app and its dependencies. Test 4K playback, normal RIFE 60, Universal 60/120, Fast RIFE 240, scene transitions and mode switching on the friend's GPU; report any visible locked-option reason.
+
+The test.6 camera-pan control still measured 25.08 dB, with zero cut suppressions and about 18.7 ms median GPU time per 48 fps source pair (540-line neural analysis). Movie edits that were not supplied have not been verified; cut detection remains heuristic.

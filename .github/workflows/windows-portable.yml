@@ -136,13 +136,17 @@ jobs:
           if($actual -ne $expected){throw "Inter font SHA-256 mismatch: expected $expected got $actual"}
       - name: Configure
         shell: pwsh
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMPV_INCLUDE_DIR="$env:MPV_INCLUDE_ROOT" -DMPV_LIBRARY="$env:MPV_LIB"
+        run: |
+          $releaseOptions = @()
+          if ($env:GITHUB_REF_TYPE -eq 'tag') { $releaseOptions = @("-DLAMBDA_RELEASE_TAG=$env:GITHUB_REF_NAME") }
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMPV_INCLUDE_DIR="$env:MPV_INCLUDE_ROOT" -DMPV_LIBRARY="$env:MPV_LIB" @releaseOptions
       - name: Build
         run: cmake --build build --config Release --parallel
-      - name: Test (Stremio addon protocol)
+      - name: Test (protocol, library, and updates)
         shell: pwsh
         run: |
           $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
+          $env:QT_QPA_PLATFORM = 'offscreen'
           ctest --test-dir build -C Release --output-on-failure
       - name: Package
         shell: pwsh
@@ -227,6 +231,28 @@ jobs:
           $archive = "LAMBDA-Player-Windows-x64-$env:GITHUB_REF_NAME.zip"
           Compress-Archive -Path portable\* -DestinationPath $archive -Force
           "RELEASE_ASSET=$archive" | Out-File $env:GITHUB_ENV -Append
+      - name: Create Windows installer
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $compiler = Join-Path $env:RUNNER_TEMP 'inno\ISCC.exe'
+          $compilerSetup = Join-Path $env:RUNNER_TEMP 'innosetup-6.5.3.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_5_3/innosetup-6.5.3.exe' -OutFile $compilerSetup
+          if ((Get-FileHash $compilerSetup).Hash -ne '9345EE029FAA0B7AED0818C3D5B227699EF9A496CCE79E20C19EB9D6EF2E2C2D') { throw 'Installer compiler checksum mismatch' }
+          $compilerDirectory = Split-Path $compiler -Parent
+          $setup = Start-Process $compilerSetup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CURRENTUSER','/NOICONS',("/DIR=`"$compilerDirectory`"")) -WindowStyle Hidden -PassThru -Wait
+          if ($setup.ExitCode -ne 0) { throw 'Installer compiler setup failed' }
+          $output = Join-Path $env:RUNNER_TEMP 'lambda-installer'
+          & ./packaging/build-test-package.ps1 -AppDir portable -BuildExe build/Release/LambdaPlayer.exe -BuildCache build/CMakeCache.txt -QtDir $env:QT_ROOT_DIR -Compiler $compiler -OutputDir $output
+          if ($LASTEXITCODE -ne 0) { throw 'Windows installer build failed' }
+          $installer = Get-ChildItem $output -Filter 'LAMBDA-Player-Setup-*-x64.exe' | Select-Object -First 1
+          if (!$installer) { throw 'Windows installer was not generated' }
+          "RELEASE_INSTALLER=$($installer.FullName)" | Out-File $env:GITHUB_ENV -Append
+          "RELEASE_CHECKSUM=$output\SHA256.txt" | Out-File $env:GITHUB_ENV -Append
+          # Publish the same complete runtime used by the installer for native updates.
+          $update = Get-ChildItem $output -Filter 'LAMBDA-Player-Windows-x64-*.zip' | Select-Object -First 1
+          "RELEASE_ASSET=$($update.FullName)" | Out-File $env:GITHUB_ENV -Append
+          "RELEASE_FEED=$output\update-feed.json" | Out-File $env:GITHUB_ENV -Append
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -236,17 +262,15 @@ jobs:
           $notes = "docs/releases/$env:GITHUB_REF_NAME.md"
           gh release view "$env:GITHUB_REF_NAME" *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --clobber
-            if ($LASTEXITCODE -ne 0) { throw "Release asset upload failed" }
-            if (Test-Path $notes) {
-              gh release edit "$env:GITHUB_REF_NAME" --notes-file "$notes"
-              if ($LASTEXITCODE -ne 0) { throw "Release notes update failed" }
-            }
+            # Published update assets are immutable: cached feed checksums must remain valid.
+            Write-Host "Release $env:GITHUB_REF_NAME already exists; keeping its published assets."
           } else {
+            $releaseOptions = @()
+            if ($env:GITHUB_REF_NAME.Contains('-')) { $releaseOptions = @('--prerelease','--latest=false') }
             if (Test-Path $notes) {
-              gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --notes-file "$notes"
+              gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" "$env:RELEASE_INSTALLER" "$env:RELEASE_CHECKSUM" "$env:RELEASE_FEED" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --notes-file "$notes" @releaseOptions
             } else {
-              gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --generate-notes
+              gh release create "$env:GITHUB_REF_NAME" "$env:RELEASE_ASSET" "$env:RELEASE_INSTALLER" "$env:RELEASE_CHECKSUM" "$env:RELEASE_FEED" --verify-tag --title "LAMBDA Player $env:GITHUB_REF_NAME" --generate-notes @releaseOptions
             }
             if ($LASTEXITCODE -ne 0) { throw "Release creation failed" }
           }

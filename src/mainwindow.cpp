@@ -9,6 +9,7 @@
 #include "frc/screeninterpolationcontroller.h"
 #include "mpvvideowidget.h"
 #include "windowbridge.h"
+#include "updatechecker.h"
 
 #include <QApplication>
 #include <QComboBox>
@@ -22,6 +23,9 @@
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QKeySequenceEdit>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMimeData>
@@ -106,6 +110,16 @@ MainWindow::MainWindow(QWidget *parent)
 
     buildUi();
     initMpv();
+    updates_ = new UpdateChecker(QStringLiteral(LAMBDA_RELEASE_TAG), this);
+    connect(updates_, &UpdateChecker::restartRequested, this, [this] { close(); });
+    connect(updates_, &UpdateChecker::notify, this, &MainWindow::showToast);
+    connect(updates_, &UpdateChecker::changed, this, [this](const QJsonObject &state) {
+        homePage_->windowBridge()->setUpdateState(state);
+        playerChrome_->windowBridge()->setUpdateState(state);
+    });
+    homePage_->windowBridge()->setUpdateState(updates_->state());
+    playerChrome_->windowBridge()->setUpdateState(updates_->state());
+    updates_->start();
     connectWindowBridge(homePage_->windowBridge());
     connectWindowBridge(playerChrome_->windowBridge());
     loadRecents();
@@ -156,6 +170,11 @@ MainWindow::MainWindow(QWidget *parent)
 #endif
 
                 if (frc_) state.insert("frc", frc_->stats());
+                if (updates_) {
+                    const auto update = updates_->state();
+                    state.insert("updateCheck", QJsonObject{{"currentTag", update["currentTag"]},
+                        {"status", update["status"]}, {"available", update["available"]}});
+                }
                 QFile diagnostic(dir.filePath(name + ".json"));
                 if (diagnostic.open(QIODevice::WriteOnly)) diagnostic.write(QJsonDocument(state).toJson());
                 // Capturing a large GL framebuffer can stall presentation;
@@ -612,6 +631,10 @@ void MainWindow::buildUi()
     connect(playerChrome_, &PlayerChrome::interpolationRequested, this, [this](int index) {
         if (index >= 0 && index < interpolationMode_->count()) interpolationMode_->setCurrentIndex(index);
     });
+    interpolationShortcut_ = QKeySequence::fromString(appSettings().value("player/interpolationShortcut").toString(), QKeySequence::PortableText);
+    lastInterpolationIndex_ = appSettings().value("player/lastInterpolationIndex", 3).toInt();
+    playerChrome_->setInterpolationShortcut(interpolationShortcut_.toString(QKeySequence::NativeText));
+    connect(playerChrome_, &PlayerChrome::configureInterpolationShortcutRequested, this, &MainWindow::configureInterpolationShortcut);
     connect(playerChrome_, &PlayerChrome::fastQualityRequested, this, [this](int quality) {
         fastQuality_ = qBound(0, quality, 2);
         QSettings(QSettings::IniFormat, QSettings::UserScope, "LAMBDA", "LAMBDA Player")
@@ -791,7 +814,27 @@ void MainWindow::initMpv()
     frc_->setFastQuality(fastQuality_);
     video_->setFrameInterpolation(frc_);
     connect(frc_, &frc::ScreenInterpolationController::diagnosticsUpdated,
-            playerChrome_, &PlayerChrome::setFrcDiagnostics);
+            this, [this](const QJsonObject &stats) { fpsDiagnostics_ = stats; });
+    fpsSample_.start();
+    connect(video_, &QOpenGLWidget::frameSwapped, this, [this] { ++fpsSwaps_; });
+    auto *fpsTimer = new QTimer(this);
+    fpsTimer->setInterval(1000);
+    connect(fpsTimer, &QTimer::timeout, this, [this] {
+        const double seconds = qMax(0.001, fpsSample_.restart() / 1000.0);
+        QJsonObject stats = frc_->isEnabled() ? fpsDiagnostics_ : QJsonObject{};
+        stats.insert("enabled", frc_->isEnabled());
+        if (frc_->isEnabled()) stats.insert("outputRate", frc_->outputRate());
+        stats.insert("paused", paused_ || !mediaLoaded_ || eofReached_);
+        stats.insert("presentationFps", (paused_ || !mediaLoaded_ || eofReached_) ? 0.0 : fpsSwaps_ / seconds);
+        double sourceFps = 0, filterFps = 0;
+        mpv_get_property(mpv_, "container-fps", MPV_FORMAT_DOUBLE, &sourceFps);
+        mpv_get_property(mpv_, "estimated-vf-fps", MPV_FORMAT_DOUBLE, &filterFps);
+        stats.insert("sourceFps", sourceFps);
+        stats.insert("filterFps", filterFps > 0 ? filterFps : sourceFps);
+        fpsSwaps_ = 0;
+        playerChrome_->setFrcDiagnostics(stats);
+    });
+    fpsTimer->start();
     connect(frc_, &frc::ScreenInterpolationController::failed, this, [this](const QString &reason) {
         const QSignalBlocker blocker(interpolationMode_);
         interpolationMode_->setCurrentIndex(0);
@@ -1030,6 +1073,61 @@ void MainWindow::handleEvent(mpv_event *event)
     }
 }
 
+void MainWindow::configureInterpolationShortcut()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle("Interpolation shortcut");
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *label = new QLabel("Press your shortcut with Ctrl or Alt. Clear it to disable the shortcut.", &dialog);
+    label->setWordWrap(true);
+    layout->addWidget(label);
+    auto *edit = new QKeySequenceEdit(interpolationShortcut_, &dialog);
+    edit->setMaximumSequenceLength(1);
+    edit->setClearButtonEnabled(true);
+    layout->addWidget(edit);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        const auto sequence = edit->keySequence();
+        if (!sequence.isEmpty()) {
+            const auto combination = sequence[0];
+            if (!(combination.keyboardModifiers() & (Qt::ControlModifier | Qt::AltModifier))
+                || (combination.key() == Qt::Key_O && combination.keyboardModifiers().testFlag(Qt::ControlModifier))) {
+                label->setText("Choose a shortcut with Ctrl or Alt. Ctrl+O is reserved for Open video.");
+                return;
+            }
+        }
+        interpolationShortcut_ = sequence;
+        appSettings().setValue("player/interpolationShortcut", sequence.toString(QKeySequence::PortableText));
+        playerChrome_->setInterpolationShortcut(sequence.toString(QKeySequence::NativeText));
+        dialog.accept();
+    });
+    edit->setFocus();
+    dialog.exec();
+}
+
+void MainWindow::toggleInterpolation()
+{
+    if (!mediaLoaded_) return;
+    if (interpolationMode_->currentIndex() > 0) {
+        interpolationMode_->setCurrentIndex(0);
+        showToast("Interpolation off");
+        return;
+    }
+    auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model());
+    auto available = [&](int index) {
+        return index > 0 && index < interpolationMode_->count() && model && model->item(index) && model->item(index)->isEnabled();
+    };
+    int index = lastInterpolationIndex_;
+    if (!available(index)) {
+        index = 0;
+        for (int candidate : {3, 1, 2, 7, 11}) if (available(candidate)) { index = candidate; break; }
+    }
+    if (index) interpolationMode_->setCurrentIndex(index);
+    else showToast("No interpolation mode is available. Open Smoothness for details.", true);
+}
+
 void MainWindow::interpolationModeChanged(int index)
 {
     interpolationWarmup_.restart();
@@ -1047,16 +1145,20 @@ void MainWindow::interpolationModeChanged(int index)
         return;
     }
 
-    if (isFrcMode(index)) {
+    if (index > 0) {
+        lastInterpolationIndex_ = index;
+        appSettings().setValue("player/lastInterpolationIndex", index);
+    }
+    const bool acceleratedRife = (index == 1 || index == 2) && frc_
+        && frc_->isAvailable(frc::ScreenInterpolationController::Backend::GenericD3D11);
+    if (isFrcMode(index) || acceleratedRife) {
         // Post-render GPU FRC replaces the VapourSynth path entirely.
         if (!frc_) return;
         frc_->setBackend(frcBackendFor(index));
-        if (index == kFast240FrcModeIndex || frcMenuIndex_ == kFast240FrcModeIndex) {
-            frc_->setGenericMotion(index == kFast240FrcModeIndex
-                                       ? frc::GenericD3D11Fruc::Motion::RifeReusable
-                                       : frc::GenericD3D11Fruc::Motion::Rife);
+        if (frcBackendFor(index) == frc::ScreenInterpolationController::Backend::GenericD3D11) {
+            frc_->setGenericMotion(frc::GenericD3D11Fruc::Motion::RifeReusable);
         }
-        frc_->setTargetFps(frcTargetFor(index));
+        frc_->setTargetFps(acceleratedRife && index == 2 ? 60.0 : frcTargetFor(index));
         frcMenuIndex_ = index;
         if (frc_->isEnabled()) {
             updateQualityBadge();
@@ -1500,6 +1602,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         && keyEventOwnerIsThisWindow(watched)) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
 
+        if (!interpolationShortcut_.isEmpty()
+            && QKeySequence(keyEvent->keyCombination()) == interpolationShortcut_) {
+            if (!keyEvent->isAutoRepeat()) toggleInterpolation();
+            return true;
+        }
         switch (keyEvent->key()) {
         case Qt::Key_Space:
             if (!keyEvent->isAutoRepeat()) togglePause();
@@ -2509,6 +2616,12 @@ void MainWindow::connectWindowBridge(WindowBridge *bridge)
     if (!bridge) {
         return;
     }
+    connect(bridge, &WindowBridge::updateCheckRequested, this, [this] { updates_->check(true); });
+    connect(bridge, &WindowBridge::updateDownloadRequested, updates_, &UpdateChecker::download);
+    connect(bridge, &WindowBridge::updateCancelRequested, updates_, &UpdateChecker::cancelDownload);
+    connect(bridge, &WindowBridge::updateDismissRequested, updates_, &UpdateChecker::dismiss);
+    connect(bridge, &WindowBridge::updateNotesRequested, updates_, &UpdateChecker::releaseNotes);
+    connect(bridge, &WindowBridge::testUpdatesRequested, updates_, &UpdateChecker::setIncludeTests);
     connect(bridge, &WindowBridge::minimizeRequested, this, &QWidget::showMinimized);
     connect(bridge, &WindowBridge::toggleMaximizeRequested, this, [this] {
         if (miniMode_) {
@@ -2802,6 +2915,7 @@ void MainWindow::syncChromeSettings()
     }
 
     QStringList interpolation;
+    QStringList interpolationReasons;
     QList<bool> interpolationEnabled;
     auto *model = qobject_cast<QStandardItemModel *>(interpolationMode_->model());
     for (int i = 0; i < interpolationMode_->count(); ++i) {
@@ -2809,12 +2923,13 @@ void MainWindow::syncChromeSettings()
         bool enabled = true;
         if (model && model->item(i)) enabled = model->item(i)->isEnabled();
         interpolationEnabled << enabled;
+        interpolationReasons << interpolationMode_->itemData(i, Qt::ToolTipRole).toString();
     }
 
     playerChrome_->setSettings(audio, qMax(0, audioTrack_->currentIndex()),
                                subtitles, qMax(0, subtitleTrack_->currentIndex()),
                                interpolation, interpolationEnabled,
-                               qMax(0, interpolationMode_->currentIndex()), subtitleGroups, fastQuality_);
+                               qMax(0, interpolationMode_->currentIndex()), subtitleGroups, fastQuality_, interpolationReasons);
 }
 
 QString MainWindow::formatTime(double seconds)

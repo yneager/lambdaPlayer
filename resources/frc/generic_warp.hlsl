@@ -2,6 +2,7 @@ Texture2D<float4> previousFrame : register(t0);
 Texture2D<float4> currentFrame : register(t1);
 Texture2D<float4> forwardFlow : register(t2);
 Texture2D<float4> backwardFlow : register(t3);
+StructuredBuffer<float> scene : register(t4);
 RWTexture2D<float4> outputFrame : register(u0);
 SamplerState linearClamp : register(s0);
 
@@ -35,6 +36,11 @@ float4 sampleFrame(Texture2D<float4> frame, float2 pixel)
 void main(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= frameWidth || id.y >= frameHeight) return;
+    if (padding0 > 0 && scene[1] > 0.5) {
+        // Hold the preceding shot until the incoming source frame's timestamp.
+        outputFrame[id.xy] = previousFrame.Load(int3(id.xy,0));
+        return;
+    }
     float2 p = float2(id.xy);
     float2 motionScale = float2(frameWidth, frameHeight) / float2(motionWidth, motionHeight);
     float4 forward = sampleFlow(forwardFlow, p);

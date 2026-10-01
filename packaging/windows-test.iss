@@ -4,10 +4,13 @@
 #ifndef PackageDir
   #error PackageDir must point to the output folder
 #endif
+#ifndef ReleaseVersion
+  #error ReleaseVersion must match the application's release tag
+#endif
 [Setup]
 AppId={{EA0BD783-856D-479D-89AA-26B443231FEB}
 AppName=LAMBDA Player
-AppVersion=0.2.7-test.1
+AppVersion={#ReleaseVersion}
 AppPublisher=LAMBDA
 DefaultDirName={localappdata}\Programs\LAMBDA Player
 DefaultGroupName=LAMBDA Player
@@ -16,7 +19,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir={#PackageDir}
-OutputBaseFilename=LAMBDA-Player-Setup-0.2.7-test.1-x64
+OutputBaseFilename=LAMBDA-Player-Setup-{#ReleaseVersion}-x64
 SetupIconFile=..\resources\branding\lambda.ico
 Compression=lzma2/fast
 SolidCompression=yes

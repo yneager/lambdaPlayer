@@ -14,8 +14,47 @@
 #include <QUrl>
 
 #include <memory>
+#include <algorithm>
 
 namespace stremio {
+
+void AddonManager::installMissing(QList<QPair<QString, QString>> defaults,
+                                std::function<void(const InstallOutcome &)> done)
+{
+    auto pending = std::make_shared<QList<QPair<QString, QString>>>(std::move(defaults));
+    auto summary = std::make_shared<InstallOutcome>();
+    summary->status = InstallOutcome::Status::CollectionImported;
+    auto next = std::make_shared<std::function<void()>>();
+    std::weak_ptr<std::function<void()>> weakNext = next;
+    *next = [this, pending, summary, done, weakNext] {
+        auto next = weakNext.lock();
+        while (!pending->isEmpty()) {
+            const auto entry = pending->takeFirst();
+            const bool installed = std::any_of(addons_.cbegin(), addons_.cend(), [&entry](const InstalledAddon &addon) {
+                return addon.descriptor.manifest.id == entry.first;
+            });
+            if (installed) { ++summary->skipped; continue; }
+            install(entry.second, [summary, next](const InstallOutcome &outcome) {
+                if (outcome.status == InstallOutcome::Status::Installed || outcome.status == InstallOutcome::Status::Updated)
+                    ++summary->imported;
+                else if (outcome.status == InstallOutcome::Status::AlreadyInstalled)
+                    ++summary->skipped;
+                else { ++summary->failed; summary->message = outcome.message; }
+                (*next)();
+            });
+            return;
+        }
+        if (summary->failed) {
+            summary->status = InstallOutcome::Status::Failed;
+            summary->message = QStringLiteral("%1 installed, %2 already present, %3 failed. Retry to install missing addons. %4")
+                .arg(summary->imported).arg(summary->skipped).arg(summary->failed).arg(summary->message);
+        } else {
+            summary->message = QStringLiteral("All installed: Cinemeta, OpenSubtitles v3 and Torrentio.");
+        }
+        done(*summary);
+    };
+    (*next)();
+}
 
 QString installStatusName(InstallOutcome::Status status)
 {

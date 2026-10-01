@@ -174,7 +174,7 @@ private:
     QString adapterName_;
     std::unique_ptr<AmfFrcInterpolator> amf_;
     std::unique_ptr<GenericD3D11Fruc> generic_;
-    GenericD3D11Fruc::Motion genericMotion_ = GenericD3D11Fruc::Motion::Rife;
+    GenericD3D11Fruc::Motion genericMotion_ = GenericD3D11Fruc::Motion::Block;
     bool genericMotionExplicit_ = false;
     int fastQuality_ = 1; // 0 stable, 1 balanced, 2 maximum smoothness
     int effectiveFastQuality_ = 1;

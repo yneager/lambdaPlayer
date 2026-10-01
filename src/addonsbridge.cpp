@@ -93,7 +93,11 @@ QJsonObject AddonsBridge::state() const
         item.insert("host", displayHost(addon.descriptor.transportUrl));
         addons.append(item);
     }
+    QStringList missing{"com.linvo.cinemeta", "org.stremio.opensubtitlesv3", "com.stremio.torrentio.addon"};
+    for (const auto &addon : backend_->addons()->addons()) missing.removeAll(addon.descriptor.manifest.id);
     return {
+        {"defaultsInstalled", missing.isEmpty()},
+        {"installingDefaults", installingDefaults_},
         {"addons", addons},
         {"streamingServer", streamingServerStatus()},
         {"defaults", QJsonArray::fromStringList(StremioBackend::defaultAddonUrls())},
@@ -114,39 +118,22 @@ void AddonsBridge::install(const QString &input, const QString &requestId)
 
 void AddonsBridge::installDefaults(const QString &requestId)
 {
-    // One after the other, so they keep Stremio's default order
-    // (Cinemeta first, then OpenSubtitles v3).
-    auto urls = std::make_shared<QStringList>(StremioBackend::defaultAddonUrls());
-    auto summary = std::make_shared<InstallOutcome>();
-    summary->status = InstallOutcome::Status::CollectionImported;
-    auto next = std::make_shared<std::function<void()>>();
-    *next = [this, requestId, urls, summary, next] {
-        if (urls->isEmpty()) {
-            if (summary->imported + summary->skipped == 0) {
-                summary->status = InstallOutcome::Status::Failed;
-            } else {
-                summary->message = QStringLiteral("Installed Cinemeta and OpenSubtitles v3.");
-            }
-            emit installResult(requestId, outcomeJson(*summary));
-            *next = nullptr; // break the self-reference
-            return;
-        }
-        const QString url = urls->takeFirst();
-        backend_->addons()->install(url, [summary, next](const InstallOutcome &outcome) {
-            if (outcome.status == InstallOutcome::Status::Installed || outcome.status == InstallOutcome::Status::Updated) {
-                ++summary->imported;
-            } else if (outcome.status == InstallOutcome::Status::AlreadyInstalled) {
-                ++summary->skipped;
-            } else {
-                ++summary->failed;
-                summary->message = outcome.message;
-            }
-            if (*next) {
-                (*next)();
-            }
-        });
-    };
-    (*next)();
+    if (installingDefaults_) {
+        emit installResult(requestId, QJsonObject{{"status", "working"}, {"message", "Default addons are already being installed."}});
+        return;
+    }
+    installingDefaults_ = true;
+    emitState();
+    const auto urls = StremioBackend::defaultAddonUrls();
+    backend_->addons()->installMissing({
+        {QStringLiteral("com.linvo.cinemeta"), urls[0]},
+        {QStringLiteral("org.stremio.opensubtitlesv3"), urls[1]},
+        {QStringLiteral("com.stremio.torrentio.addon"), urls[2]},
+    }, [this, requestId](const InstallOutcome &outcome) {
+        installingDefaults_ = false;
+        emitState();
+        emit installResult(requestId, outcomeJson(outcome));
+    });
 }
 
 void AddonsBridge::importCollectionText(const QString &text, const QString &requestId)

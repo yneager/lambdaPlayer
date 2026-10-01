@@ -22,7 +22,7 @@
 
   const HOLE_SELECTOR = [
     '[data-drag] button', '[data-drag] a', '[data-drag] [data-nodrag]', '[data-drag] input',
-    '.window-controls',
+    '.window-controls', '.lambda-update-notice',
     'html.is-mini [data-drag-mini] button', 'html.is-mini [data-drag-mini] a',
     'html.is-mini [data-drag-mini] [data-nodrag]', 'html.is-mini [data-drag-mini] .timeline',
     'html.is-mini [data-drag-mini] .volume-track', '.lambda-settings.open', '.lambda-popover.open'
@@ -55,6 +55,54 @@
       b.title = max ? 'Restore' : 'Maximize';
       b.setAttribute('aria-label', b.title);
     });
+    scheduleRegions();
+  }
+
+  function applyUpdate() {
+    if (!bridge) return;
+    const update = bridge.update || {};
+    const updating = ['downloading', 'verifying', 'preparing', 'restarting'].includes(update.status);
+    const message = update.status === 'downloading' ? 'Downloading update · ' + (update.progress || 0) + '%'
+      : update.status === 'verifying' ? 'Verifying download…'
+      : update.status === 'preparing' ? 'Preparing update. Keep LAMBDA open…'
+      : update.status === 'restarting' ? 'Restarting LAMBDA…'
+      : update.status === 'error' && update.available ? 'Update failed. Your current version is safe. Try again.'
+      : 'Update and restart. Your library and playback positions are kept.';
+    let notice = document.querySelector('.lambda-update-notice');
+    if (update.showNotification && !notice) {
+      notice = document.createElement('div'); notice.className = 'lambda-update-notice';
+      notice.setAttribute('role', 'status'); notice.setAttribute('aria-live', 'polite');
+      notice.innerHTML = '<strong></strong><span></span><progress max="100" hidden></progress><div><button type="button" data-update-download>Update</button><button type="button" data-update-cancel hidden>Cancel download</button><button type="button" data-update-notes>What’s new</button><button type="button" data-update-dismiss>Later</button></div>';
+      notice.querySelector('[data-update-download]').onclick = () => bridge.downloadUpdate();
+      notice.querySelector('[data-update-cancel]').onclick = () => bridge.cancelUpdate();
+      notice.querySelector('[data-update-notes]').onclick = () => {
+        const dialog = document.createElement('dialog'); dialog.className = 'lambda-update-details';
+        const title = document.createElement('h3'); title.textContent = 'What’s new · ' + (bridge.update.tag || '');
+        const content = document.createElement('pre'); content.textContent = bridge.update.notes || 'Release notes are not available for this update.';
+        const close = document.createElement('button'); close.textContent = 'Close'; close.onclick = () => dialog.close();
+        dialog.append(title, content, close); document.body.appendChild(dialog);
+        dialog.onclose = () => dialog.remove(); dialog.showModal();
+      };
+      notice.querySelector('[data-update-dismiss]').onclick = () => bridge.dismissUpdate();
+      document.body.appendChild(notice);
+    }
+    if (notice) {
+      notice.hidden = !update.showNotification;
+      notice.querySelector('strong').textContent = 'Update available · ' + (update.tag || '');
+      notice.querySelector('span').textContent = message;
+      notice.querySelector('[data-update-download]').disabled = !!update.busy;
+      notice.querySelector('[data-update-dismiss]').disabled = !!update.busy;
+      notice.querySelector('[data-update-cancel]').hidden = update.status !== 'downloading';
+      const progress = notice.querySelector('progress'); progress.hidden = !updating; progress.value = update.progress || 0;
+    }
+    const check = document.querySelector('[data-pop="updates"]');
+    if (check) { check.disabled = !!update.busy; check.textContent = update.status === 'checking' ? 'Checking…' : 'Check for updates'; }
+    const download = document.querySelector('[data-pop="update-download"]');
+    if (download) { download.hidden = !update.available; download.disabled = !!update.busy; download.textContent = 'Update and restart'; }
+    const tests = document.querySelector('[data-test-updates]');
+    if (tests) { tests.checked = !!update.includeTests; tests.disabled = !!update.busy; }
+    const status = document.querySelector('[data-update-status]');
+    if (status) status.textContent = updating ? message : update.available ? 'Available: ' + update.tag : update.status === 'checking' ? 'Checking updates…' : update.status === 'ready' ? 'You’re up to date.' : update.status === 'error' ? 'Could not check updates. Try again later.' : 'Installed: ' + (update.currentTag || '');
     scheduleRegions();
   }
 
@@ -93,6 +141,8 @@
       buildControls();
       applyState();
       bridge.stateChanged.connect(applyState);
+      bridge.updateChanged.connect(applyUpdate);
+      applyUpdate();
       new ResizeObserver(scheduleRegions).observe(document.body);
       window.addEventListener('resize', scheduleRegions);
       window.addEventListener('scroll', scheduleRegions, {passive: true});
@@ -101,6 +151,10 @@
       scheduleRegions();
     },
     refresh: scheduleRegions,
+    refreshUpdates: applyUpdate,
+    checkUpdates: () => bridge && bridge.checkUpdates(),
+    downloadUpdate: () => bridge && bridge.downloadUpdate(),
+    setTestUpdates: enabled => bridge && bridge.setTestUpdates(enabled),
 
     toast(message, kind) {
       let host = document.querySelector('.lambda-toasts');

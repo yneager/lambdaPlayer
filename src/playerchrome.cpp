@@ -183,6 +183,7 @@ PlayerChrome::PlayerChrome(QWidget *parent)
         else if (action == "activity") emit activityRequested();
         else if (action == "load-subtitle") emit loadSubtitleRequested();
         else if (action == "mini") emit miniRequested();
+        else if (action == "interpolation-shortcut") emit configureInterpolationShortcutRequested();
     });
     connect(bridge, &LambdaBridge::seekRequested, this, &PlayerChrome::seekRequested);
     connect(bridge, &LambdaBridge::volumeRequested, this, &PlayerChrome::volumeRequested);
@@ -209,6 +210,12 @@ void PlayerChrome::setTimeline(double position, double duration) { position_ = p
 void PlayerChrome::setVolume(int volume) { volume_ = qBound(0, volume, 100); pushState(); }
 void PlayerChrome::setSpeed(double speed) { speed_ = speed; pushState(); }
 void PlayerChrome::setQuality(const QString &primary, const QString &secondary) { qualityPrimary_ = primary; qualitySecondary_ = secondary; pushState(); }
+void PlayerChrome::setInterpolationShortcut(const QString &shortcut)
+{
+    if (interpolationShortcut_ == shortcut) return;
+    interpolationShortcut_ = shortcut;
+    pushSettings();
+}
 void PlayerChrome::setFrcDiagnostics(const QJsonObject &stats)
 {
     if (!ready_ || !view_) return;
@@ -246,13 +253,15 @@ void PlayerChrome::playEnterAnimation() { runScript("window.LambdaWindow&&Lambda
 void PlayerChrome::setSettings(const QStringList &audio, int audioIndex,
                                const QStringList &subtitles, int subtitleIndex,
                                const QStringList &interpolation, const QList<bool> &interpolationEnabled,
-                               int interpolationIndex, const QStringList &subtitleGroups, int fastQuality)
+                               int interpolationIndex, const QStringList &subtitleGroups, int fastQuality,
+                               const QStringList &interpolationReasons)
 {
     audio_ = audio;
     subtitles_ = subtitles;
     subtitleGroups_ = subtitleGroups;
     interpolation_ = interpolation;
     interpolationEnabled_ = interpolationEnabled;
+    interpolationReasons_ = interpolationReasons;
     audioIndex_ = audioIndex;
     subtitleIndex_ = subtitleIndex;
     interpolationIndex_ = interpolationIndex;
@@ -344,11 +353,16 @@ void PlayerChrome::pushSettings()
         subtitleItems[i] = item;
     }
     settings.insert("subtitles", subtitleItems);
-    settings.insert("interpolation", optionArray(interpolation_, &interpolationEnabled_));
+    auto interpolationItems = optionArray(interpolation_, &interpolationEnabled_);
+    for (int i=0; i<interpolationItems.size() && i<interpolationReasons_.size(); ++i) {
+        auto item=interpolationItems[i].toObject(); item.insert("reason",interpolationReasons_[i]); interpolationItems[i]=item;
+    }
+    settings.insert("interpolation", interpolationItems);
     settings.insert("audioIndex", audioIndex_);
     settings.insert("subtitleIndex", subtitleIndex_);
     settings.insert("interpolationIndex", interpolationIndex_);
     settings.insert("fastQuality", fastQuality_);
+    settings.insert("interpolationShortcut", interpolationShortcut_);
     const QString json = QString::fromUtf8(QJsonDocument(settings).toJson(QJsonDocument::Compact));
     view_->page()->runJavaScript(QString("window.lambdaUi&&window.lambdaUi.setSettings(%1);").arg(json));
 }

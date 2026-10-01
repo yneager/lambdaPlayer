@@ -188,9 +188,10 @@ bool StremioBackend::clearCache(QString *error)
 QStringList StremioBackend::defaultAddonUrls()
 {
     // Stremio/stremio-official-addons index.json: Cinemeta (catalogs and
-    // metadata for IMDb ids) and OpenSubtitles v3 (subtitles).
+    // metadata for IMDb ids), OpenSubtitles v3 (subtitles), and Torrentio (streams).
     return {
         QStringLiteral("https://v3-cinemeta.strem.io/manifest.json"),
         QStringLiteral("https://opensubtitles-v3.strem.io/manifest.json"),
+        QStringLiteral("https://torrentio.strem.fun/manifest.json"),
     };
 }

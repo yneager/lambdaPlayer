@@ -1,12 +1,20 @@
 # LAMBDA Player
 
-**Stable version: v0.2.6 · Public test: [v0.2.7-test.1](https://github.com/yneager/lambdaPlayer/releases/tag/v0.2.7-test.1)**
+**Latest version: [v0.2.8](https://github.com/yneager/lambdaPlayer/releases/tag/v0.2.8)**
 
-For the new public test, download [LAMBDA-Player-Setup-0.2.7-test.1-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.2.7-test.1/LAMBDA-Player-Setup-0.2.7-test.1-x64.exe). This single file installs the complete Windows x64 app with its dependencies.
+Download [LAMBDA-Player-Setup-0.2.8-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.2.8/LAMBDA-Player-Setup-0.2.8-x64.exe). This single file installs the complete Windows x64 app with its dependencies.
 
 LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. It is also a Stremio add-on client: installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player.
 
 ## Version History
+
+### v0.2.8 — Interpolation fixes, player controls, addons, and updates
+
+- Improved Universal motion quality and scene-cut handling for RIFE double/60, with reduced-resolution motion analysis and full-resolution synthesis.
+- FPS overlay button and a saved, configurable interpolation-toggle shortcut under Smoothness.
+- Persistent default-addon installer beside Add-ons: Cinemeta, OpenSubtitles v3 and Torrentio; preserves configured addons and retries missing ones.
+- One-click verified updates with automatic restart and recovery. Install this version once if upgrading from a build without the native updater.
+- [Release notes](docs/releases/v0.2.8.md).
 
 ### v0.2.7-test.1 — Library, resume, installer, and lambda icon
 

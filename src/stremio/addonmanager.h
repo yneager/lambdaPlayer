@@ -68,6 +68,9 @@ public:
     // not, stremio://, legacy /stremio/v1), a URL whose response carries an
     // X-Stremio-Addon header, or a JSON collection URL.
     void install(const QString &input, std::function<void(const InstallOutcome &)> done);
+    // Defaults are identified by manifest id, preserving configured URLs.
+    void installMissing(QList<QPair<QString, QString>> defaults,
+                        std::function<void(const InstallOutcome &)> done);
     // Install a descriptor (from an addon catalog): the manifest is fetched
     // fresh from its transport URL first, as Stremio's AddonDetails does.
     void installFromTransportUrl(const QString &transportUrl, std::function<void(const InstallOutcome &)> done);

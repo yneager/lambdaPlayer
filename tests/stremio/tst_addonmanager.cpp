@@ -20,6 +20,7 @@ class AddonManagerTest : public QObject
 private slots:
     void init();
     void installAndDuplicate();
+    void missingDefaultsPreserveConfigurationsAndRetry();
     void configuredUrlWithoutManifestSuffix();
     void sameIdDifferentConfigurations();
     void updateInPlace();
@@ -78,6 +79,61 @@ void AddonManagerTest::installAndDuplicate()
     const InstallOutcome again = install(manager, server.base() + "/a/manifest.json");
     QCOMPARE(again.status, InstallOutcome::Status::AlreadyInstalled);
     QCOMPARE(manager.addons().size(), 1);
+}
+
+void AddonManagerTest::missingDefaultsPreserveConfigurationsAndRetry()
+{
+    MockAddonServer server;
+    server.route("/configured/manifest.json", manifest("torrentio"));
+    server.route("/cinemeta/manifest.json", manifest("cinemeta"));
+    server.route("/subtitles/manifest.json", "unavailable", 503);
+    AddonClient client;
+    AddonManager manager(&client, storage_);
+    const QString configured = server.base() + "/configured/manifest.json";
+    QCOMPARE(install(manager, configured).status, InstallOutcome::Status::Installed);
+    manager.setEnabled(configured, false);
+    const QList<QPair<QString, QString>> defaults{
+        {"cinemeta", server.base() + "/cinemeta/manifest.json"},
+        {"subtitles", server.base() + "/subtitles/manifest.json"},
+        {"torrentio", server.base() + "/unconfigured/manifest.json"},
+    };
+    std::optional<InstallOutcome> result;
+    manager.installMissing(defaults, [&](const InstallOutcome &outcome) { result = outcome; });
+    QVERIFY(QTest::qWaitFor([&] { return result.has_value(); }, 20000));
+    QCOMPARE(result->status, InstallOutcome::Status::Failed);
+    QCOMPARE(result->imported, 1);
+    QCOMPARE(result->skipped, 1);
+    QCOMPARE(result->failed, 1);
+    QCOMPARE(server.count("/unconfigured/manifest.json"), 0);
+    QCOMPARE(manager.addons().first().descriptor.transportUrl, configured);
+    QVERIFY(!manager.addons().first().enabled);
+
+    server.route("/subtitles/manifest.json", manifest("subtitles"));
+    server.clearRequests();
+    result.reset();
+    manager.installMissing(defaults, [&](const InstallOutcome &outcome) { result = outcome; });
+    QVERIFY(QTest::qWaitFor([&] { return result.has_value(); }, 20000));
+    QCOMPARE(result->failed, 0);
+    QCOMPARE(result->imported, 1);
+    QCOMPARE(result->skipped, 2);
+    QCOMPARE(server.count("/cinemeta/manifest.json"), 0);
+    QCOMPARE(server.count("/unconfigured/manifest.json"), 0);
+    QCOMPARE(manager.addons().size(), 3);
+
+    server.clearRequests();
+    result.reset();
+    manager.installMissing(defaults, [&](const InstallOutcome &outcome) { result = outcome; });
+    QVERIFY(result.has_value());
+    QCOMPARE(result->skipped, 3);
+    QVERIFY(result->message.startsWith("All installed"));
+    QVERIFY(server.requests().isEmpty());
+
+    QVERIFY(manager.remove(server.base() + "/subtitles/manifest.json"));
+    result.reset();
+    manager.installMissing(defaults, [&](const InstallOutcome &outcome) { result = outcome; });
+    QVERIFY(QTest::qWaitFor([&] { return result.has_value(); }, 20000));
+    QCOMPARE(result->imported, 1);
+    QCOMPARE(result->skipped, 2);
 }
 
 void AddonManagerTest::configuredUrlWithoutManifestSuffix()

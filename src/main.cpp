@@ -1,5 +1,7 @@
 #include <QApplication>
 #include <QIcon>
+#include <QFile>
+#include <QTimer>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QStyleFactory>
@@ -8,6 +10,15 @@
 #include <clocale>
 
 #include "mainwindow.h"
+#ifdef Q_OS_WIN
+#include <windows.h>
+// Ask hybrid laptop drivers to run OpenGL on the discrete GPU, so its D3D11
+// interop device and the video renderer can share textures on one adapter.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -502,6 +513,12 @@ int main(int argc, char *argv[])
     MainWindow window;
     window.resize(1360, 840);
     window.show();
+    const QString health = qEnvironmentVariable("LAMBDA_UPDATE_HEALTH_FILE");
+    qunsetenv("LAMBDA_UPDATE_HEALTH_FILE");
+    if (!health.isEmpty()) QTimer::singleShot(5000, &app, [health] {
+        QFile file(health);
+        if (file.open(QIODevice::WriteOnly)) file.write(LAMBDA_RELEASE_TAG);
+    });
 
     if (app.arguments().size() > 1) {
         window.openPath(app.arguments().at(1));

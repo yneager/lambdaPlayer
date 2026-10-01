@@ -338,8 +338,7 @@
   function updateHomeEmpty(rowCount) {
     const empty = q('.addons-empty');
     empty.hidden = state.addons.length > 0;
-    const hasDefaults = state.defaults.every(url => state.addons.some(a => a.transportUrl === url));
-    qa('[data-install-defaults]').forEach(b => { b.hidden = hasDefaults; });
+    refreshDefaultButtons();
     const notice = q('.no-catalogs');
     if (state.addons.length > 0 && rowCount === 0) {
       if (!notice) {
@@ -1083,10 +1082,19 @@
     });
   }
 
+  function refreshDefaultButtons() {
+    qa('[data-install-defaults]').forEach(button => {
+      button.hidden = false;
+      button.disabled = !bridge || state.installingDefaults;
+      button.textContent = state.installingDefaults ? 'Installing…' : state.defaultsInstalled ? 'All installed' : 'Install default addons';
+    });
+  }
+
   function installDefaults(button) {
+    if (state.defaultsInstalled) { toast('All installed: Cinemeta, OpenSubtitles v3 and Torrentio.'); return; }
     if (button) button.disabled = true;
     installRequest(id => bridge.installDefaults(id), result => {
-      if (button) button.disabled = false;
+      refreshDefaultButtons();
       toast(describeOutcome(result), result.status === 'failed');
       setInstallFeedback(result);
     });
@@ -1220,8 +1228,7 @@
     }
     state.addons.forEach((addon, index) => list.appendChild(addonCard(addon, index, state.addons.length)));
     renderServer();
-    const hasDefaults = state.defaults.every(url => state.addons.some(a => a.transportUrl === url));
-    qa('[data-install-defaults]').forEach(b => { b.hidden = hasDefaults; });
+    refreshDefaultButtons();
     refreshWindow();
   }
 
@@ -1359,6 +1366,9 @@
     state.addons = next.addons || [];
     state.server = next.streamingServer || {};
     state.defaults = next.defaults || [];
+    state.defaultsInstalled = !!next.defaultsInstalled;
+    state.installingDefaults = !!next.installingDefaults;
+    refreshDefaultButtons();
     if (changed) {
       addonCatalogs.loaded = false;
       discover.initialized = false;
