@@ -32,6 +32,7 @@ struct InterpolatedFrame
 {
     GpuFrame frame;
     double content = 0.0;  // source-frame position; fractional means generated
+    double pictureContent = -1.0; // actual picture identity; held frames retain their source position
 };
 
 class FrameInterpolator

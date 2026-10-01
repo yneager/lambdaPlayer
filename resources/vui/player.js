@@ -350,7 +350,7 @@
     }
     if (!fpsVisible) return;
     const fps = n => (Number(n) || 0).toFixed(1);
-    const presentation = stats.paused ? 'Paused' : `${fps(stats.presentationFps)} Qt swaps/s`;
+    const presentation = stats.paused ? 'Paused' : `${fps(stats.presentationFps)} FPS displayed`;
     overlay.textContent = stats.enabled
       ? `${presentation} · source ${fps(stats.sourceFps)} fps · target ${fps(stats.outputRate)} fps · generated ${fps(stats.generatedPerSec)}/s · drops ${fps(stats.droppedPerSec)}/s · repeats ${fps(stats.repeatedSwapsPerSec)}/s`
       : `${presentation} · source ${fps(stats.sourceFps)} fps · video/filter ${fps(stats.filterFps)} fps`;

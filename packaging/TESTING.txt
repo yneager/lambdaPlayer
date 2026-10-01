@@ -1,4 +1,4 @@
-LAMBDA Player 0.2.8 (Windows 10/11 x64)
+LAMBDA Player 0.2.9 (Windows 10/11 x64)
 
 Run the LAMBDA-Player-Setup-<version>-x64.exe file. It installs for your Windows user,
 with no separate Qt, Python, mpv, or streaming engine installation needed.
@@ -38,9 +38,10 @@ you do not need an account or to visit a website.
 Older builds without this updater require one installation of this build first.
 
 PLAYER CONTROLS
-Click FPS in the player controls to show/hide the FPS overlay. Qt swaps measure
-presentation activity, including repeated frames; source/filter/target rates
-are labeled separately. Choose Smoothness > Toggle interpolation shortcut to
+Click the FPS icon in the player controls to show/hide the FPS overlay. Displayed
+FPS counts new video pictures at completed window swaps. UI redraws, repeated
+swaps and originals held across scene cuts do not inflate the count. Source,
+filter and target rates are labeled separately. Choose Smoothness > Toggle interpolation shortcut to
 record a shortcut with Ctrl or Alt. Clear and save to disable it. Toggling on
 restores the last chosen available interpolation mode.
 
@@ -56,3 +57,22 @@ block matching. RIFE x2/60 keep their existing motion settings. Scene-cut
 checks include spatial correspondence for shots with similar colors; genuine
 cuts hold the preceding original frame until the next source timestamp.
 Please retest the movies and exact scene switches that showed artifacts.
+
+STARTUP UPDATE NOTIFICATION
+Each launch checks for newer versions. A known newer version is shown even
+when offline. Later snoozes the notification until the next launch. No update
+notification is shown when this version is already current.
+
+MOTION AND DISPLAYED FPS TEST
+Fast movement is matched across a wider area before declaring a scene cut.
+Normal RIFE x2/60 no longer adapt their output target down to the original
+cadence. The FPS button uses the old Smoothness icon; Smoothness has a new
+motion icon. Test fast pans, scene changes and paused playback with FPS enabled.
+
+SCENE SWITCHES, SUBTITLES AND LIBRARY ALIGNMENT (0.2.9)
+Whole-shot color comparison and more sensitive low-contrast structural checks
+prevent interpolation across detected cuts. Fast-pan correspondence remains
+protected. Folder cards now share the catalog rail padding, including narrow
+windows. OpenGL upload state is reset before rendering; selecting subtitles
+on NVIDIA direct-sharing decoders switches to copy-based hardware decoding.
+Please test switching embedded, external and addon subtitles on the RTX 5080.

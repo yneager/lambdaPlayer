@@ -1,7 +1,9 @@
 #include "mpvvideowidget.h"
+#include "mpvglstate.h"
 
 #include <QMetaObject>
 #include <QOpenGLContext>
+#include <QOpenGLExtraFunctions>
 
 #include <mpv/render_gl.h>
 
@@ -17,7 +19,9 @@ MpvVideoWidget::MpvVideoWidget(QWidget *parent)
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
 
     connect(this, &QOpenGLWidget::frameSwapped, this, [this] {
-        if (frc_) frc_->frameSwapped();
+        const bool changed = lastPaintWasFrc_
+            ? (frc_ && frc_->frameSwapped()) : nativePicture_ > 0 && nativePresentation_.swapped(double(nativePicture_));
+        if (changed) emit videoFramePresented();
         if (renderContext_) {
             mpv_render_context_report_swap(renderContext_);
         }
@@ -93,6 +97,7 @@ void MpvVideoWidget::initializeGL()
         return;
     }
 
+    prepareMpvOpenGL(context()->extraFunctions());
     mpv_opengl_init_params glInit{};
     glInit.get_proc_address = &MpvVideoWidget::getProcAddress;
     glInit.get_proc_address_ctx = nullptr;
@@ -129,8 +134,14 @@ void MpvVideoWidget::paintGL()
         return;
     }
 
-    if (frc_ && frc_->paint(defaultFramebufferObject(), physicalSize())) {
-        return;
+    lastPaintWasFrc_ = frc_ && frc_->paint(defaultFramebufferObject(), physicalSize());
+    if (lastPaintWasFrc_) return;
+    mpv_render_frame_info info{};
+    const mpv_render_param query{MPV_RENDER_PARAM_NEXT_FRAME_INFO, &info};
+    if (mpv_render_context_get_info(renderContext_, query) >= 0
+        && (info.flags & MPV_RENDER_FRAME_INFO_PRESENT)
+        && !(info.flags & (MPV_RENDER_FRAME_INFO_REDRAW | MPV_RENDER_FRAME_INFO_REPEAT))) {
+        ++nativePicture_;
     }
     const QSize size = physicalSize();
     renderMpv(static_cast<int>(defaultFramebufferObject()), size.width(), size.height());
@@ -138,6 +149,7 @@ void MpvVideoWidget::paintGL()
 
 void MpvVideoWidget::renderMpv(int fboId, int width, int height)
 {
+    prepareMpvOpenGL(context()->extraFunctions());
     mpv_opengl_fbo fbo{};
     fbo.fbo = fboId;
     fbo.w = width;

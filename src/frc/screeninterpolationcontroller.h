@@ -1,4 +1,5 @@
 #pragma once
+#include "../videopresentation.h"
 
 // Post-render frame generation with AMD AMF FRC.
 //
@@ -99,7 +100,7 @@ public:
     bool paint(unsigned int targetFbo, const QSize &physicalSize);
     // Called after Qt has swapped the composited video frame, rather than
     // when an output was merely selected by the presentation timer.
-    void frameSwapped();
+    bool frameSwapped(); // true only when a different video picture was displayed
     // Must run with the GL context current before it is destroyed.
     void releaseGl();
 
@@ -134,6 +135,7 @@ private:
     {
         int slot = -1;
         double content = 0.0;   // source frames
+        double pictureContent = -1.0;
         qint64 wallNs = 0;      // when this content is shown
         qint64 tick = 0;        // presentation tick it was assigned to
     };
@@ -147,7 +149,7 @@ private:
     void workerLoop();
     void post(Job job);
     // GUI-thread handlers of worker results.
-    void onOutput(int slot, double content, qint64 readyNs, int generation);
+    void onOutput(int slot, double content, double pictureContent, qint64 readyNs, int generation);
     void onConfigured(bool ok, const QString &error, int width, int height, int stages, int generation);
     void fail(const QString &reason);
     void schedule();
@@ -253,6 +255,9 @@ private:
     std::vector<double> swapIntervalsMs_;
     std::vector<double> sourceToSwapMs_;
     double shownContent_ = -1.0;
+    double shownPictureContent_ = -1.0;
+    double paintedPictureContent_ = -1.0;
+    VideoPresentationTracker picturePresentation_;
     // L: content -> presentation latency (measured arrival p95 + margin).
     double latencyNs_ = 0.0;
     std::vector<double> processingSamplesMs_;  // rolling, intended time -> available on GUI thread

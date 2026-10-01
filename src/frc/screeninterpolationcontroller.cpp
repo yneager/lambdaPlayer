@@ -354,6 +354,8 @@ bool ScreenInterpolationController::setEnabled(bool enabled, QString *error)
         swappedFrames_ = 0;
         repeatedSwaps_ = 0;
         lastPaintedTick_ = lastSwappedTick_ = -1;
+        shownPictureContent_ = paintedPictureContent_ = -1.0;
+        picturePresentation_.reset();
         lastSwapNs_ = 0;
         swapIntervalsMs_.clear();
         sourceToSwapMs_.clear();
@@ -417,6 +419,8 @@ void ScreenInterpolationController::resetTimeline()
     epochValid_ = false;
     shownContent_ = -1.0;
     lastPaintedTick_ = lastSwappedTick_ = -1;
+    shownPictureContent_ = paintedPictureContent_ = -1.0;
+    picturePresentation_.reset();
     lastSwapNs_ = 0;
     swapIntervalsMs_.clear();
     sourceToSwapMs_.clear();
@@ -466,7 +470,7 @@ double ScreenInterpolationController::outputRate() const
         && generic_->motion() == GenericD3D11Fruc::Motion::RifeReusable) {
         const QScreen *screen = QGuiApplication::primaryScreen();
         const double refresh = screen && screen->refreshRate() >= 30.0 ? screen->refreshRate() : requested;
-        return std::max(source, std::min(requested, refresh) * fastRateScale_);
+        return reusableOutputRate(source, requested, refresh, fastRateScale_);
     }
     return requested;
 }
@@ -739,15 +743,16 @@ bool ScreenInterpolationController::paint(unsigned int targetFbo, const QSize &p
     interop_->unlock(view);
     pushSample(paintMs_, double(nowNs() - paintStart) / kMs);
     lastPaintedTick_ = lastPresentedTick_;
+    paintedPictureContent_ = shownPictureContent_;
     return true;
 }
 
-void ScreenInterpolationController::frameSwapped()
+bool ScreenInterpolationController::frameSwapped()
 {
-    if (!enabled_ || paused_ || lastPaintedTick_ < 0) return;
+    if (!enabled_ || paused_ || lastPaintedTick_ < 0) return false;
     if (lastPaintedTick_ <= lastSwappedTick_) {
         ++repeatedSwaps_;
-        return;
+        return false;
     }
     const qint64 now = nowNs();
     if (lastSwapNs_ > 0) pushSample(swapIntervalsMs_, double(now - lastSwapNs_) / kMs);
@@ -756,6 +761,7 @@ void ScreenInterpolationController::frameSwapped()
     lastSwapNs_ = now;
     lastSwappedTick_ = lastPaintedTick_;
     ++swappedFrames_;
+    return picturePresentation_.swapped(paintedPictureContent_);
 }
 
 // ---- worker -------------------------------------------------------------------------
@@ -831,7 +837,7 @@ void ScreenInterpolationController::workerLoop()
         QString error;
         FrameInterpolator *backend = activeInterpolator();
         const qint64 workStart = clock_.nsecsElapsed();
-        struct ReadyOutput { int slot; double content; qint64 readyNs; int generation; };
+        struct ReadyOutput { int slot; double content; double pictureContent; qint64 readyNs; int generation; };
         std::vector<ReadyOutput> readyOutputs;
         const bool ok = backend && backend->processFrame(job.surface, double(job.seq), [&](const InterpolatedFrame &output) {
             int slotIndex = -1;
@@ -855,7 +861,7 @@ void ScreenInterpolationController::workerLoop()
             const qint64 readyNs = clock_.nsecsElapsed();
             ++outputs_;
             if (output.content != std::floor(output.content)) ++generated_;
-            readyOutputs.push_back({slotIndex, output.content, readyNs, job.generation});
+            readyOutputs.push_back({slotIndex, output.content, output.pictureContent >= 0 ? output.pictureContent : output.content, readyNs, job.generation});
         }, &error);
         // Submit all output copies together, then publish them to the GUI.
         // This keeps a queued callback from presenting a texture before its
@@ -863,7 +869,7 @@ void ScreenInterpolationController::workerLoop()
         if (!readyOutputs.empty()) deviceContext_->Flush();
         for (const ReadyOutput &ready : readyOutputs) {
             QMetaObject::invokeMethod(this, [this, ready] {
-                onOutput(ready.slot, ready.content, ready.readyNs, ready.generation);
+                onOutput(ready.slot, ready.content, ready.pictureContent, ready.readyNs, ready.generation);
             }, Qt::QueuedConnection);
         }
         const double workMs = double(clock_.nsecsElapsed() - workStart) / kMs;
@@ -915,7 +921,7 @@ void ScreenInterpolationController::pushSample(std::vector<double> &samples, dou
     if (samples.size() > 240) samples.erase(samples.begin(), samples.begin() + 48);
 }
 
-void ScreenInterpolationController::onOutput(int slot, double content, qint64 readyNs, int generation)
+void ScreenInterpolationController::onOutput(int slot, double content, double pictureContent, qint64 readyNs, int generation)
 {
     if (!enabled_ || generation != generation_ || paused_) {
         freeSlot(slot);
@@ -964,6 +970,7 @@ void ScreenInterpolationController::onOutput(int slot, double content, qint64 re
     Presentation p;
     p.slot = slot;
     p.content = content;
+    p.pictureContent = pictureContent;
     p.wallNs = intended + qint64(latency);
     lagFrames_ = qint64(std::llround(hold));
     lastLagMs_ = latency / kMs;
@@ -1066,6 +1073,7 @@ void ScreenInterpolationController::presentDue()
         lastInput_ = {};
         lastPresentedTick_ = shown.tick;
         shownContent_ = shown.content;
+        shownPictureContent_ = shown.pictureContent;
         ++counters_.presented;
         ++windowPresented_;
         if (shown.content != std::floor(shown.content)) ++counters_.presentedGenerated;
@@ -1186,10 +1194,13 @@ void ScreenInterpolationController::logStats()
         if (fastRateLowSeconds_ >= 3 && nextScale > 0.5) nextScale = 0.5;
         else if (fastRateRecoverySeconds_ >= 20 && nextScale < 1.0) nextScale = 1.0;
         if (nextScale != fastRateScale_) {
+            const double previousRate = outputRate();
             fastRateScale_ = nextScale;
             fastRateLowSeconds_ = fastRateRecoverySeconds_ = overloadedSeconds_ = 0;
-            configuredSize_ = pendingSize_ = requestedSize_ = QSize();
-            resetTimeline();
+            if (outputRate() != previousRate) {
+                configuredSize_ = pendingSize_ = requestedSize_ = QSize();
+                resetTimeline();
+            }
         }
     } else {
         fastOverloadSeconds_ = fastRecoverySeconds_ = 0;

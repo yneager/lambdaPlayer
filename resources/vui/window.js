@@ -66,7 +66,7 @@
       : update.status === 'verifying' ? 'Verifying download…'
       : update.status === 'preparing' ? 'Preparing update. Keep LAMBDA open…'
       : update.status === 'restarting' ? 'Restarting LAMBDA…'
-      : update.status === 'error' && update.available ? 'Update failed. Your current version is safe. Try again.'
+      : update.status === 'error' && update.available && update.errorStage !== 'checking' ? 'Update failed. Your current version is safe. Try again.'
       : 'Update and restart. Your library and playback positions are kept.';
     let notice = document.querySelector('.lambda-update-notice');
     if (update.showNotification && !notice) {

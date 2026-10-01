@@ -120,6 +120,7 @@ QJsonObject UpdateChecker::state() const {
     result.insert("currentTag", currentTag_);
     result.insert("includeTests", includeTests_);
     result.insert("status", status_);
+    result.insert("errorStage", errorStage_);
     result.insert("busy", busy_);
     result.insert("progress", progress_);
     result.insert("available", !available_.isEmpty());
@@ -128,6 +129,11 @@ QJsonObject UpdateChecker::state() const {
 }
 void UpdateChecker::publish() { emit changed(state()); }
 void UpdateChecker::start() {
+    if (started_) return;
+    started_ = true;
+    // "Later" snoozes this session; remind again on the next launch.
+    settings().remove("updates/dismissed");
+    publish();
     const QString lastJob = settings().value("updates/job").toString();
     if (!lastJob.isEmpty()) {
         auto *resultTimer = new QTimer(this);
@@ -153,18 +159,18 @@ void UpdateChecker::start() {
         });
         resultTimer->start(3000);
     }
-    QTimer::singleShot(3000, this, [this] { check(false); });
+    QTimer::singleShot(3000, this, [this] { check(false, true); });
     auto *timer = new QTimer(this);
     timer->setInterval(6 * 60 * 60 * 1000);
     connect(timer, &QTimer::timeout, this, [this] { check(false); });
     timer->start();
 }
-void UpdateChecker::check(bool manual) {
+void UpdateChecker::check(bool manual, bool force) {
     if (busy_) return;
     const auto last = QDateTime::fromString(settings().value("updates/lastCheck").toString(), Qt::ISODate);
     const auto now = QDateTime::currentDateTimeUtc();
-    if (!manual && last.isValid() && last <= now && last.secsTo(now) < 6 * 60 * 60) return;
-    busy_ = true; status_ = "checking"; publish();
+    if (!manual && !force && last.isValid() && last <= now && last.secsTo(now) < 6 * 60 * 60) return;
+    busy_ = true; status_ = "checking"; errorStage_.clear(); publish();
     QNetworkRequest request(endpoint_);
     request.setRawHeader("Accept", "application/vnd.github+json");
     request.setRawHeader("X-GitHub-Api-Version", "2022-11-28");
@@ -183,7 +189,7 @@ void UpdateChecker::check(bool manual) {
                                   && json.object()["releases"].isArray()));
         reply->deleteLater();
         if (!success) {
-            status_ = "error"; publish();
+            status_ = "error"; errorStage_ = "checking"; publish();
             if (manual) emit notify("Updates could not be checked. Check your connection and try again later.", true);
             return;
         }
@@ -262,7 +268,7 @@ void UpdateChecker::download() {
     });
 }
 void UpdateChecker::cancelDownload() { if (downloadReply_) downloadReply_->abort(); }
-void UpdateChecker::failUpdate(const QString &message) { busy_=false; status_="error"; publish(); emit notify(message,true); }
+void UpdateChecker::failUpdate(const QString &message) { busy_=false; status_="error"; errorStage_="updating"; publish(); emit notify(message,true); }
 void UpdateChecker::prepareUpdate(const QString &job) {
     QFile resource(":/updater/update.ps1"), script(job+"/update.ps1"), config(job+"/job.json");
     if (!resource.open(QIODevice::ReadOnly) || !script.open(QIODevice::WriteOnly) || !config.open(QIODevice::WriteOnly)) {

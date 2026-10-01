@@ -151,6 +151,7 @@ private:
     void fetchAddonSubtitles();
     void addAddonSubtitles(const QList<stremio::Subtitles> &subtitles, const QString &addonName);
     void selectAddonSubtitle(int index);
+    void ensureSubtitleRenderingCompatibility();
     QString currentMediaTitle() const;
     void saveRecents();
     int recentIndex(const QString &path) const;
@@ -183,7 +184,7 @@ private:
     QKeySequence interpolationShortcut_;
     int lastInterpolationIndex_ = 3;
     QJsonObject fpsDiagnostics_;
-    quint64 fpsSwaps_ = 0;
+    quint64 fpsFrames_ = 0;
     QElapsedTimer fpsSample_;
 
     QWidget *appRoot_ = nullptr;

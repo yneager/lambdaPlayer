@@ -17,7 +17,7 @@ public:
     static QJsonObject selectFeed(const QJsonObject &feed, const QString &current, bool includeTests);
     void start();
 public slots:
-    void check(bool manual = true);
+    void check(bool manual = true, bool force = false);
     void setIncludeTests(bool enabled);
     void dismiss();
     void download();
@@ -34,8 +34,10 @@ private:
     QNetworkAccessManager network_;
     QJsonObject available_;
     QString status_ = "idle";
+    QString errorStage_;
     bool includeTests_ = false;
     bool busy_ = false;
+    bool started_ = false;
     int progress_ = 0;
     QNetworkReply *downloadReply_ = nullptr;
     void failUpdate(const QString &message);

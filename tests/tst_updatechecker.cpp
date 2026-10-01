@@ -167,6 +167,41 @@ private slots:
         QCOMPARE(feed.requests,2);
         UpdateChecker installed("v0.2.8",nullptr,feed.url()); QVERIFY(!installed.state()["available"].toBool());
     }
+    void startupChecksRecentFeedAndRemindsAfterLater() {
+        Feed feed; feed.body=QJsonDocument(QJsonArray{release("v0.2.8")}).toJson();
+        UpdateChecker initial("v0.2.7",nullptr,feed.url());
+        initial.check(false);
+        QTRY_VERIFY(initial.state()["available"].toBool());
+        initial.dismiss();
+        QCOMPARE(feed.requests,1);
+
+        feed.body=QJsonDocument(QJsonArray{release("v0.2.9")}).toJson();
+        UpdateChecker launch("v0.2.7",nullptr,feed.url());
+        QSignalSpy messages(&launch,&UpdateChecker::notify);
+        QVERIFY(!launch.state()["showNotification"].toBool());
+        launch.start(); launch.start();
+        QVERIFY(launch.state()["showNotification"].toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(launch.state()["tag"].toString(),QString("v0.2.9"),6000);
+        QCOMPARE(feed.requests,2);
+        QCOMPARE(messages.count(),0);
+        launch.dismiss();
+        QVERIFY(!launch.state()["showNotification"].toBool());
+
+        feed.body="{}";
+        UpdateChecker offlineLaunch("v0.2.7",nullptr,feed.url());
+        QSignalSpy errors(&offlineLaunch,&UpdateChecker::notify);
+        offlineLaunch.start();
+        QVERIFY(offlineLaunch.state()["showNotification"].toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(offlineLaunch.state()["status"].toString(),QString("error"),6000);
+        QVERIFY(offlineLaunch.state()["showNotification"].toBool());
+        QCOMPARE(feed.requests,3);
+        QCOMPARE(offlineLaunch.state()["errorStage"].toString(),QString("checking"));
+        QCOMPARE(errors.count(),0);
+
+        UpdateChecker installed("v0.2.9",nullptr,feed.url());
+        installed.start();
+        QVERIFY(!installed.state()["showNotification"].toBool());
+    }
     void backgroundFailureQuietManualFailureVisible() {
         Feed feed; feed.body="{}";
         UpdateChecker checker("v0.2.7",nullptr,feed.url());

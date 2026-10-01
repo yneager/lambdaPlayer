@@ -816,7 +816,7 @@ void MainWindow::initMpv()
     connect(frc_, &frc::ScreenInterpolationController::diagnosticsUpdated,
             this, [this](const QJsonObject &stats) { fpsDiagnostics_ = stats; });
     fpsSample_.start();
-    connect(video_, &QOpenGLWidget::frameSwapped, this, [this] { ++fpsSwaps_; });
+    connect(video_, &MpvVideoWidget::videoFramePresented, this, [this] { ++fpsFrames_; });
     auto *fpsTimer = new QTimer(this);
     fpsTimer->setInterval(1000);
     connect(fpsTimer, &QTimer::timeout, this, [this] {
@@ -825,13 +825,13 @@ void MainWindow::initMpv()
         stats.insert("enabled", frc_->isEnabled());
         if (frc_->isEnabled()) stats.insert("outputRate", frc_->outputRate());
         stats.insert("paused", paused_ || !mediaLoaded_ || eofReached_);
-        stats.insert("presentationFps", (paused_ || !mediaLoaded_ || eofReached_) ? 0.0 : fpsSwaps_ / seconds);
+        stats.insert("presentationFps", (paused_ || !mediaLoaded_ || eofReached_) ? 0.0 : fpsFrames_ / seconds);
         double sourceFps = 0, filterFps = 0;
         mpv_get_property(mpv_, "container-fps", MPV_FORMAT_DOUBLE, &sourceFps);
         mpv_get_property(mpv_, "estimated-vf-fps", MPV_FORMAT_DOUBLE, &filterFps);
         stats.insert("sourceFps", sourceFps);
         stats.insert("filterFps", filterFps > 0 ? filterFps : sourceFps);
-        fpsSwaps_ = 0;
+        fpsFrames_ = 0;
         playerChrome_->setFrcDiagnostics(stats);
     });
     fpsTimer->start();
@@ -1510,6 +1510,22 @@ void MainWindow::audioTrackChanged(int index)
     syncChromeSettings();
 }
 
+void MainWindow::ensureSubtitleRenderingCompatibility()
+{
+    if (!mpv_ || !frc_) return;
+    const QString adapter = frc_->stats().value("adapter").toString();
+    if (!adapter.contains(QLatin1String("NVIDIA"), Qt::CaseInsensitive)) return;
+    char *value = mpv_get_property_string(mpv_, "hwdec-current");
+    const QString decoder = value ? QString::fromUtf8(value) : QString();
+    mpv_free(value);
+    // Keep hardware decoding, but avoid direct decoder/OpenGL texture sharing
+    // on the path reported to corrupt video when subtitle textures are added.
+    // Copy decoding preserves the source's resolution and bit depth.
+    if (decoder == QLatin1String("d3d11va") || decoder == QLatin1String("nvdec")) {
+        mpv_set_property_string(mpv_, "hwdec", "auto-copy");
+    }
+}
+
 void MainWindow::subtitleTrackChanged(int index)
 {
     if (index < 0) {
@@ -1531,6 +1547,7 @@ void MainWindow::subtitleTrackChanged(int index)
     if (id < 0) {
         mpv_set_property_string(mpv_, "sid", "no");
     } else {
+        ensureSubtitleRenderingCompatibility();
         setMpvPropertyFlag("sub-visibility", true);
         setMpvPropertyInt64("sid", id);
     }
@@ -1552,6 +1569,7 @@ void MainWindow::loadSubtitle()
     }
 
     setMpvPropertyFlag("sub-visibility", true);
+    ensureSubtitleRenderingCompatibility();
     command({"sub-add", path, "select"});
 
     QTimer::singleShot(250, this, &MainWindow::refreshTracks);
@@ -2354,6 +2372,7 @@ void MainWindow::selectAddonSubtitle(int index)
     if (index < 0 || index >= addonSubtitles_.size()) {
         return;
     }
+    ensureSubtitleRenderingCompatibility();
     const AddonSubtitle &item = addonSubtitles_[index];
     const QString label = QStringLiteral("%1 · %2").arg(stremio::languageName(item.subtitle.lang), item.addonName);
     addonSubtitleLabels_.insert(item.subtitle.url, label);

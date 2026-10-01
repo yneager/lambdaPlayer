@@ -2,12 +2,12 @@ param([string]$Bench, [string]$Root, [string]$Model = '')
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
-function Image([string]$file,[int]$r,[int]$g,[int]$b,[string]$pattern = "") {
+function Image([string]$file,[int]$r,[int]$g,[int]$b,[string]$pattern = "", [int]$contrast = 32) {
     $bitmap=New-Object Drawing.Bitmap(3840,2160)
     $graphics=[Drawing.Graphics]::FromImage($bitmap)
     $graphics.Clear([Drawing.Color]::FromArgb($r,$g,$b))
     if ($pattern) {
-        $brush=New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb($r+32,$g+32,$b+32))
+        $brush=New-Object Drawing.SolidBrush([Drawing.Color]::FromArgb($r+$contrast,$g+$contrast,$b+$contrast))
         if($pattern -eq 'vertical'){ for($x=0;$x -lt 3840;$x+=768){$graphics.FillRectangle($brush,$x,0,384,2160)} }
         else { for($y=0;$y -lt 2160;$y+=768){$graphics.FillRectangle($brush,0,$y,3840,384)} }
         $brush.Dispose()
@@ -19,14 +19,15 @@ $cases=@(
     @{name='color-cut';a=@(64,0,0);b=@(0,19,0)},
     @{name='dark-cut';a=@(20,0,0);b=@(0,6,0)},
     @{name='bright-cut';a=@(30,30,30);b=@(220,220,220)},
-    @{name='same-palette-structure-cut';a=@(64,64,64);b=@(64,64,64);patternA='vertical';patternB='horizontal'}
+    @{name='same-palette-structure-cut';a=@(64,64,64);b=@(64,64,64);patternA='vertical';patternB='horizontal';contrast=32},
+    @{name='low-contrast-structure-cut';a=@(32,32,32);b=@(32,32,32);patternA='vertical';patternB='horizontal';contrast=8}
 )
 $modes=@('block')
 if ($Model) { $modes+=@('rife-reuse','rife') }
 foreach($case in $cases) {
     $a=Join-Path $Root ($case.name+'-A.png'); $b=Join-Path $Root ($case.name+'-B.png')
-    Image $a $case.a[0] $case.a[1] $case.a[2] $case.patternA
-    Image $b $case.b[0] $case.b[1] $case.b[2] $case.patternB
+    Image $a $case.a[0] $case.a[1] $case.a[2] $case.patternA $(if($case.contrast){$case.contrast}else{32})
+    Image $b $case.b[0] $case.b[1] $case.b[2] $case.patternB $(if($case.contrast){$case.contrast}else{32})
     foreach($mode in $modes) {
         foreach($sample in @(@{fps=48;time='0.5'},@{fps=60;time='0.4'},@{fps=60;time='0.8'},@{fps=240;time='0.5'},@{fps=240;time='0.9'},@{fps=240;time='1.0'})) {
             $time=$sample.time

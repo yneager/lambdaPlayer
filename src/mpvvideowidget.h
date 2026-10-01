@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QOpenGLWidget>
+#include "videopresentation.h"
 #include <QString>
 #include <mpv/client.h>
 #include <atomic>
@@ -42,6 +43,7 @@ public:
 
 signals:
     void renderReady();
+    void videoFramePresented();
     void renderFailed(const QString &reason);
 
 protected:
@@ -60,4 +62,7 @@ private:
     mpv_render_context *renderContext_ = nullptr;
     std::atomic_bool frameRequestPending_{false};
     frc::ScreenInterpolationController *frc_ = nullptr;
+    bool lastPaintWasFrc_ = false;
+    quint64 nativePicture_ = 0;
+    VideoPresentationTracker nativePresentation_;
 };

@@ -920,6 +920,7 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
     {
         OutputSlot *slot;
         double content;
+        double pictureContent;
     };
     std::vector<Pending> pending;
     auto emitPending = [&]() {
@@ -927,7 +928,7 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
         context_->Flush();
         for (const Pending &item : pending) {
             if (!waitForOutput(*item.slot, error)) return false;
-            onOutput(InterpolatedFrame{GpuFrame{item.slot->interop.Get(), item.slot->owner}, item.content});
+            onOutput(InterpolatedFrame{GpuFrame{item.slot->interop.Get(), item.slot->owner}, item.content, item.pictureContent});
             interopContext4_->Signal(copyFenceInterop_.Get(), ++copyValue_);
             item.slot->copied = copyValue_;
         }
@@ -937,6 +938,8 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
     const bool rife = motion_ != Motion::Block;
     bool refinePair = false;
     bool skipMotion = false;
+    bool staticPair = false;
+    bool cutPair = false;
     if (needsMotion) runSceneDiff(previous->srv.Get(), current->srv.Get());
     if (needsMotion && rife) {
         stamp("start");
@@ -948,8 +951,8 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
             D3D11_MAPPED_SUBRESOURCE mapped{};
             if (SUCCEEDED(context_->Map(sceneReadback_.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
                 const float difference = *static_cast<const float *>(mapped.pData);
-                const bool staticPair = difference < 0.0025f;
-                const bool cutPair = static_cast<const float *>(mapped.pData)[1] > 0.5f;
+                staticPair = difference < 0.0025f;
+                cutPair = static_cast<const float *>(mapped.pData)[1] > 0.5f;
                 skipMotion = staticPair || cutPair;
                 if (staticPair) ++skippedStaticPairs_;
                 else if (cutPair) ++skippedCutPairs_;
@@ -1032,12 +1035,14 @@ bool GenericD3D11Fruc::processFrame(const GpuFrame &input, double content,
             return false;
         }
         const double frameContent = atCurrent ? content : outputContent;
+        const double pictureContent = atCurrent ? content : cutPair ? previousContent_
+            : staticPair ? (localTime < 0.5 ? previousContent_ : content) : frameContent;
         if (separate_) {
             computeContext4_->Signal(outputFence_.Get(), ++outputValue_);
             slot.ready = outputValue_;
-            pending.push_back({&slot, frameContent});
+            pending.push_back({&slot, frameContent, pictureContent});
         } else {
-            onOutput(InterpolatedFrame{GpuFrame{slot.interop.Get(), slot.owner}, frameContent});
+            onOutput(InterpolatedFrame{GpuFrame{slot.interop.Get(), slot.owner}, frameContent, pictureContent});
         }
         nextOutputContent_ += outputStep_;
     }

@@ -1,6 +1,6 @@
 # In-app updates
 
-LAMBDA checks for updates after startup and every six hours. Stable and test channels are separate. Clicking **Update** downloads the Windows runtime ZIP, checks its SHA-256 and size, prepares a complete replacement beside the installation, then closes and restarts LAMBDA. No browser or installer is involved in updating.
+LAMBDA checks for updates on every launch and every six hours while running. The launch check runs quietly after three seconds, even if the previous check was recent. A known newer version appears immediately from the validated cache, including when offline. **Later** snoozes that notification until the next launch. These launch/reminder refinements are included in `v0.2.9`. Stable and test channels are separate. Clicking **Update** downloads the Windows runtime ZIP, checks its SHA-256 and size, prepares a complete replacement beside the installation, then closes and restarts LAMBDA. No browser or installer is involved in updating.
 
 The app saves playback when closing normally. Library/settings/watch-later data stay in their existing profile folder. The updater also preserves the uninstaller and files added to a portable app directory. Preparing an update therefore requires space for the download and a full second copy of the application.
 

@@ -1,12 +1,21 @@
 # LAMBDA Player
 
-**Latest version: [v0.2.8](https://github.com/yneager/lambdaPlayer/releases/tag/v0.2.8)**
+**Latest version: [v0.2.9](https://github.com/yneager/lambdaPlayer/releases/tag/v0.2.9)**
 
-Download [LAMBDA-Player-Setup-0.2.8-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.2.8/LAMBDA-Player-Setup-0.2.8-x64.exe). This single file installs the complete Windows x64 app with its dependencies.
+Download [LAMBDA-Player-Setup-0.2.9-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.2.9/LAMBDA-Player-Setup-0.2.9-x64.exe), or click **Update** in an updater-enabled installation. This single file installs the complete Windows x64 app with its dependencies.
 
 LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. It is also a Stremio add-on client: installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player.
 
 ## Version History
+
+### v0.2.9 — Motion, scene switches, subtitles, and displayed FPS
+
+- Preserve RIFE interpolation during fast pans and protect dark/low-contrast scene switches.
+- Count newly displayed video frames in the FPS overlay; refreshed FPS/interpolation icons.
+- Align Your library folder cards with other rows.
+- Isolate OpenGL upload state and add a NVIDIA subtitle decoder safeguard.
+- Check for updates on every launch and remind again after Later at the next launch.
+- [Release notes](docs/releases/v0.2.9.md).
 
 ### v0.2.8 — Interpolation fixes, player controls, addons, and updates
 

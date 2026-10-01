@@ -55,7 +55,7 @@ if (!$UpdateBaseUrl) { $UpdateBaseUrl = "https://github.com/yneager/lambdaPlayer
 if ($UpdateBaseUrl -notmatch '^https://') { throw 'Update files must be hosted over HTTPS' }
 $archiveHash = (Get-FileHash -LiteralPath $archivePath).Hash.ToLowerInvariant()
 $feedNotesPath = Join-Path $repo "docs/releases/$releaseTag.md"
-$feedNotes = if (Test-Path -LiteralPath $feedNotesPath) { Get-Content -LiteralPath $feedNotesPath -Raw } else { 'One-click updates with automatic restart and recovery.' }
+$feedNotes = if (Test-Path -LiteralPath $feedNotesPath) { [IO.File]::ReadAllText($feedNotesPath) } else { 'One-click updates with automatic restart and recovery.' }
 @{schemaVersion=1; releases=@(@{version=$releaseTag; prerelease=$releaseTag.Contains('-');
   url="$($UpdateBaseUrl.TrimEnd('/'))/$archiveName"; sha256=$archiveHash;
   size=(Get-Item -LiteralPath $archivePath).Length; notes=$feedNotes})} |

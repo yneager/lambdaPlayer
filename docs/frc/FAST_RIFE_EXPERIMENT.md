@@ -38,7 +38,10 @@ Maximum's selective exact inference measured 24.64 dB. Its three-run 4K
 median without a refinement was 24.76 ms; an individual refined synthetic
 pair took up to 38.48 ms, within one 24 fps source interval on this GPU.
 
-The player overlay reports generated fps, frames actually swapped by Qt,
+The player FPS headline counts distinct video pictures at completed Qt window
+swaps; UI redraws and originals held during scene cuts do not inflate it.
+Native mpv repeats/redraws are excluded using NEXT_FRAME_INFO flags. The
+interpolation diagnostics separately report generated fps and output ticks swapped by Qt,
 effective target fps, drops per second, repeated swaps per second, and p95
 source-to-swap latency.
 The older `presentedPerSec` counter means frames selected by the presentation
@@ -47,13 +50,17 @@ timer no longer posts repeated zero-delay wakeups before 240 Hz ticks.
 
 The fast target is capped to the primary screen's refresh rate. If sustained
 presentation pressure remains after dropping to 360p analysis, the mode halves
-its effective output target; it waits for 20 seconds of clean swaps and GPU
+its effective output target, with a floor of 60 FPS or twice the source rate
+(limited by the requested rate and screen refresh). Normal x2/60 modes preserve
+their full target under this adaptation. It waits for 20 seconds of clean swaps and GPU
 headroom before restoring the full target. This can make a 240 fps selection
 run at 120 fps temporarily. The overlay shows the effective rate.
 
-The mode reads its existing 256-sample scene-difference result once per source
-pair. For nearly identical frames it repeats the nearer real frame; across a
-hard cut it does the same. In either case it skips the RIFE network entirely.
+The mode reads the two-float scene-difference result once per source pair.
+The shader samples a fixed 64x36 footprint and checks 144 patches in both
+directions with coarse-to-fine motion matching. For nearly identical frames
+it repeats the nearer real frame; across a hard cut it holds the preceding
+original until the next source boundary. Both cases skip the RIFE network.
 At 3840×2160 on the local RX 9070 XT, the static test pair took 2.52 ms and
 the hard-cut pair 2.96 ms, versus 20.58 ms for a moving pair (medians of three,
 three, and five runs). The benchmark now reports how many pairs were skipped
@@ -77,3 +84,26 @@ with a 3840×2160 A/B pair, `--analysis 540 --fps 240 --time 0.5 --repeat 5`,
 and the RIFE v4.26 model directory. `LAMBDA_FRC_AUTOSTART=generic-fast` enables
 the menu mode after media loads for local runtime diagnostics. The option is
 experimental and has not been released.
+
+
+Local v0.2.9-test.2 motion regression: the former scene detector classified a
+384-pixel horizontal / 128-pixel vertical 4K pan as a cut and repeated the original
+(15.53 dB against the known midpoint). Coarse-to-fine spatial matching over a wider
+region, with motion correspondence required before raw change declares a cut,
+interpolated the same pan at 32.03 dB; no cut skips. A 640/192-pixel pan also avoided
+false cuts. The final very-fast-pan pair at 540p analysis measured 17.03–20.41 ms on the local
+RX 9070 XT; these are not sustained playback or RTX 5080 measurements.
+Run tests/frc-fast-motion.ps1 with -Bench, -Root, -Model and a 4K -Source still.
+Run tests/frc-scene-cuts.ps1 separately to check that true cuts retain the original
+until the exact source boundary. tests/tst_videopresentation.cpp covers held
+pictures, repeated swaps, overtaken frames, seek resets and adaptive-rate floors.
+
+
+Version 0.2.9 adds a 64-bin hue/perceptual-brightness histogram to compare whole
+shots. Its cut decision requires a large distribution change and sufficient raw
+RGB change; it does not veto coherent pans merely for small palette drift.
+Faint structural evidence is tracked separately from detailed motion evidence,
+so sensitizing dark-shot detection does not weaken the established pan guard.
+The regression with vertical/horizontal gray patterns at RGB 32/40 previously
+warped between shots; now it holds the original exactly. The same 640/192-pixel
+4K pan still interpolates at 24.33 dB instead of repeating at 14.42 dB.
