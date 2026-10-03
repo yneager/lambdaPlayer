@@ -19,6 +19,7 @@
   let bridge = null;
   let pending = false;
   let lastRegions = '';
+  let whatsNewDialog;
 
   const HOLE_SELECTOR = [
     '[data-drag] button', '[data-drag] a', '[data-drag] [data-nodrag]', '[data-drag] input',
@@ -68,17 +69,22 @@
       : update.status === 'restarting' ? 'Restarting LAMBDA…'
       : update.status === 'error' && update.available && update.errorStage !== 'checking' ? 'Update failed. Your current version is safe. Try again.'
       : 'Update and restart. Your library and playback positions are kept.';
-    let notice = document.querySelector('.lambda-update-notice');
+    let notice = document.querySelector('[data-update-notice]');
     if (update.showNotification && !notice) {
-      notice = document.createElement('div'); notice.className = 'lambda-update-notice';
-      notice.setAttribute('role', 'status'); notice.setAttribute('aria-live', 'polite');
-      notice.innerHTML = '<strong></strong><span></span><progress max="100" hidden></progress><div><button type="button" data-update-download>Update</button><button type="button" data-update-cancel hidden>Cancel download</button><button type="button" data-update-notes>What’s new</button><button type="button" data-update-dismiss>Later</button></div>';
+      notice = document.createElement('dialog'); notice.className = 'lambda-update-notice';
+      notice.dataset.updateNotice = 'true';
+      notice.setAttribute('aria-label', 'New update available');
+      notice.oncancel = event => { event.preventDefault(); if (!bridge.update.busy) bridge.dismissUpdate(); };
+      notice.innerHTML = '<strong></strong><span></span><ul class="release-highlights"></ul><progress max="100" hidden></progress><div><button type="button" data-update-download>Update</button><button type="button" data-update-cancel hidden>Cancel download</button><button type="button" data-update-notes>What’s new</button><button type="button" data-update-dismiss>Later</button></div>';
       notice.querySelector('[data-update-download]').onclick = () => bridge.downloadUpdate();
       notice.querySelector('[data-update-cancel]').onclick = () => bridge.cancelUpdate();
       notice.querySelector('[data-update-notes]').onclick = () => {
         const dialog = document.createElement('dialog'); dialog.className = 'lambda-update-details';
         const title = document.createElement('h3'); title.textContent = 'What’s new · ' + (bridge.update.tag || '');
-        const content = document.createElement('pre'); content.textContent = bridge.update.notes || 'Release notes are not available for this update.';
+        const content = document.createElement('ul'); content.className = 'release-highlights';
+        for (const text of window.LambdaReleaseHighlights(bridge.update.notes)) {
+          const item = document.createElement('li'); item.textContent = text; content.append(item);
+        }
         const close = document.createElement('button'); close.textContent = 'Close'; close.onclick = () => dialog.close();
         dialog.append(title, content, close); document.body.appendChild(dialog);
         dialog.onclose = () => dialog.remove(); dialog.showModal();
@@ -87,13 +93,28 @@
       document.body.appendChild(notice);
     }
     if (notice) {
-      notice.hidden = !update.showNotification;
+      if (update.showNotification && !notice.open && !document.hidden) notice.showModal();
+      else if ((!update.showNotification || document.hidden) && notice.open) notice.close();
+      const highlights = notice.querySelector('.release-highlights');
+      highlights.replaceChildren(...window.LambdaReleaseHighlights(update.notes).map(text => { const li = document.createElement('li'); li.textContent = text; return li; }));
       notice.querySelector('strong').textContent = 'Update available · ' + (update.tag || '');
       notice.querySelector('span').textContent = message;
       notice.querySelector('[data-update-download]').disabled = !!update.busy;
       notice.querySelector('[data-update-dismiss]').disabled = !!update.busy;
       notice.querySelector('[data-update-cancel]').hidden = update.status !== 'downloading';
       const progress = notice.querySelector('progress'); progress.hidden = !updating; progress.value = update.progress || 0;
+    }
+    if (update.whatsNew?.tag && !whatsNewDialog && !document.hidden) {
+      const dialog = whatsNewDialog = document.createElement('dialog');
+      dialog.className = 'lambda-update-notice';
+      dialog.setAttribute('aria-label', 'What is new');
+      const title = document.createElement('strong'); title.textContent = 'Welcome to LAMBDA ' + update.whatsNew.tag;
+      const intro = document.createElement('span'); intro.textContent = 'Your update is complete. Here is what is new.';
+      const list = document.createElement('ul'); list.className = 'release-highlights';
+      for (const text of window.LambdaReleaseHighlights(update.whatsNew.notes)) { const li = document.createElement('li'); li.textContent = text; list.append(li); }
+      const done = document.createElement('button'); done.textContent = 'Start watching'; done.onclick = () => dialog.close();
+      dialog.onclose = () => { dialog.remove(); whatsNewDialog = null; bridge.dismissWhatsNew(); };
+      dialog.append(title, intro, list, done); document.body.append(dialog); dialog.showModal();
     }
     const check = document.querySelector('[data-pop="updates"]');
     if (check) { check.disabled = !!update.busy; check.textContent = update.status === 'checking' ? 'Checking…' : 'Check for updates'; }
@@ -138,11 +159,15 @@
   window.LambdaWindow = {
     attach(windowBridge) {
       bridge = windowBridge;
+      window.LambdaPreferences?.attach(bridge);
+      window.LambdaPreferences?.attach(bridge);
+      if (window.LambdaFrameClock) window.LambdaFrameClock.attach(bridge);
       buildControls();
       applyState();
       bridge.stateChanged.connect(applyState);
       bridge.updateChanged.connect(applyUpdate);
       applyUpdate();
+      document.addEventListener('visibilitychange', applyUpdate);
       new ResizeObserver(scheduleRegions).observe(document.body);
       window.addEventListener('resize', scheduleRegions);
       window.addEventListener('scroll', scheduleRegions, {passive: true});

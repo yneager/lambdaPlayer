@@ -6,6 +6,7 @@
 #include <QSGRendererInterface>
 #include <QStyleFactory>
 #include <QSurfaceFormat>
+#include <QScreen>
 
 #include <clocale>
 
@@ -55,6 +56,19 @@ int main(int argc, char *argv[])
     }
 
     QApplication app(argc, argv);
+    // Qt 6.8's offscreen WebEngine compositor defaults to 60 Hz even when
+    // QScreen reports a faster display. Local JS uses WindowBridge's bounded,
+    // demand-driven monitor clock; remove Chromium's separate 60 Hz ceiling.
+    // Configure before creating any QWebEngineView. Opt out for comparison
+    // with LAMBDA_UI_FRAME_PACING=0.
+    bool highRefreshDisplay = false;
+    for (auto *screen : app.screens()) highRefreshDisplay |= screen->refreshRate() > 60.5;
+    app.setProperty("lambdaUiFramePacing", highRefreshDisplay && qEnvironmentVariable("LAMBDA_UI_FRAME_PACING") != "0");
+    if (highRefreshDisplay && qEnvironmentVariable("LAMBDA_UI_FRAME_PACING") != "0"
+        && !chromiumFlags.contains("disable-frame-rate-limit")) {
+        chromiumFlags = (chromiumFlags + " --disable-frame-rate-limit").trimmed();
+        qputenv("QTWEBENGINE_CHROMIUM_FLAGS", chromiumFlags);
+    }
     std::setlocale(LC_NUMERIC, "C");
 
     app.setApplicationName("LAMBDA Player");

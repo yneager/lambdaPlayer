@@ -7,8 +7,10 @@
   <title>LAMBDA Player</title>
   <link rel="stylesheet" href="./home.css" />
   <link rel="stylesheet" href="./addons.css" />
+  <link rel="stylesheet" href="./downloads.css" />
   <link rel="stylesheet" href="./window.css" />
   <link rel="stylesheet" href="./motion.css" />
+  <link rel="stylesheet" href="./preferences.css" />
 </head>
 <body>
   <div class="launch-intro" aria-hidden="true">
@@ -33,6 +35,7 @@
         <a class="active" href="#home" data-view-link="home">Home</a>
         <a href="#discover" data-view-link="discover">Discover</a>
         <a href="#addons" data-view-link="addons">Add-ons</a>
+        <a href="#downloads" data-view-link="downloads">Downloader+</a>
         <button type="button" class="default-addons-button" data-install-defaults disabled>Install default addons</button>
       </div>
 
@@ -47,8 +50,8 @@
         <button class="round-button" data-action="folder" aria-label="Add folder to library" title="Add a movie or series folder">
           <svg viewBox="0 0 24 24"><path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.6l2 2.2H18a2.5 2.5 0 0 1 2.5 2.5v7.3A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17z"/></svg>
         </button>
-        <button class="profile" data-action="about" aria-label="About LAMBDA Player" title="About LAMBDA Player" aria-haspopup="dialog">
-          <span class="profile-core">λ</span>
+        <button class="profile" data-action="about" aria-label="Settings" title="Settings" aria-haspopup="dialog">
+          <span class="profile-core"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3-.5 2-2 1.2-2-.6-2 3.5 1.5 1.4v3L2.5 15l2 3.4 2-.6 2 1.2.5 2h4l.5-2 2-1.2 2 .6 2-3.4-1.5-1.5v-3L20.5 9l-2-3.4-2 .6-2-1.2-.5-2z"/><circle cx="11" cy="12" r="3"/></svg></span>
           <span class="profile-ring"></span>
         </button>
         <div data-window-controls></div>
@@ -294,15 +297,53 @@
     </section>
   </main>
 
+  <main class="view page-view" data-view="downloads" hidden>
+    <section class="page-head">
+      <span class="eyebrow">YOUR DOWNLOADS</span>
+      <h1>Downloader+</h1>
+      <p class="page-lede">Drop a torrent or link anywhere, or paste it below. Choose where to save before downloading. Keep track of progress and play finished videos in LAMBDA.</p>
+    </section>
+    <section class="addon-install glass">
+      <form class="install-form" data-download-form autocomplete="off">
+        <input type="text" name="url" placeholder="Paste a download link or magnet URL" spellcheck="false" aria-label="Download URL" required />
+        <button type="submit" class="pill-btn primary" data-download-control disabled>Add download</button>
+      </form>
+      <div class="install-actions">
+        <button type="button" class="pill-btn" data-download-torrent data-download-control disabled>Add torrent…</button>
+        <button type="button" class="pill-btn" data-download-folder>Change folder</button>
+        <button type="button" class="pill-btn" data-download-pause data-download-control disabled>Pause all</button>
+        <button type="button" class="pill-btn" data-download-resume data-download-control disabled>Resume all</button>
+        <button type="button" class="pill-btn" data-download-retry hidden>Reconnect</button>
+      </div>
+      <div class="install-feedback" data-download-message aria-live="polite">Opening Downloader+ starts the download engine.</div>
+      <small class="download-folder" data-download-directory></small>
+    </section>
+    <section class="content-stage installed-section">
+      <div class="section-head"><h2>Transfers</h2><span class="download-stats" data-download-stats></span></div>
+      <div class="chip-row" data-download-filters>
+        <button type="button" class="chip selected" data-filter="all">All</button>
+        <button type="button" class="chip" data-filter="active">Downloading</button>
+        <button type="button" class="chip" data-filter="paused">Paused</button>
+        <button type="button" class="chip" data-filter="complete">Completed</button>
+      </div>
+      <div class="addon-list download-list" data-download-list aria-live="off"></div>
+    </section>
+  </main>
+
   <dialog id="local-details" class="local-details">
     <button type="button" class="pill-btn local-close" data-local-close aria-label="Close">Close</button>
     <div class="local-heading"><img alt="" hidden /><div><span class="eyebrow">YOUR LOCAL LIBRARY</span><h2></h2><div class="local-actions"><button class="pill-btn" data-local-art>Find artwork</button><button class="pill-btn" data-local-refresh>Rescan folder</button><button class="pill-btn" data-local-remove>Remove from library</button></div></div></div>
     <div class="local-episodes"></div>
   </dialog>
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <script src="./preferences.js"></script>
+  <script src="./release-highlights.js"></script>
   <script src="./window.js"></script>
+  <script src="./frame-clock.js"></script>
   <script src="./stremio.js"></script>
   <script src="./home.js"></script>
+  <script src="./motrix-client.js"></script>
+  <script src="./downloads.js"></script>
 
   <footer>
     <div class="footer-brand"><span class="brand-mark" aria-hidden="true">λ</span><strong>LAMBDA</strong></div>

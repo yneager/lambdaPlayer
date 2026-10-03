@@ -46,8 +46,8 @@
 }
 
 @keyframes ripple-soft {
-  0% { box-shadow: 0 0 0 0 rgba(120, 245, 231, .24); }
-  100% { box-shadow: 0 0 0 10px rgba(120, 245, 231, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), .24); }
+  100% { box-shadow: 0 0 0 10px rgba(var(--accent-rgb), 0); }
 }
 
 @keyframes settings-item-arrive {
@@ -89,7 +89,7 @@
 .launch-lambda {
   color: #bbfff6;
   font: 500 clamp(104px, 13vw, 154px)/.85 Inter, "Segoe UI Symbol", sans-serif;
-  text-shadow: 0 0 24px rgba(120,245,231,.48), 0 0 96px rgba(120,245,231,.16);
+  text-shadow: 0 0 24px rgba(var(--accent-rgb),.48), 0 0 96px rgba(var(--accent-rgb),.16);
   animation: launch-mark-arrive .9s var(--motion-ease) both;
 }
 .launch-name {
@@ -106,7 +106,7 @@
   margin-top: 4px;
   transform-origin: center;
   background: linear-gradient(90deg, transparent, rgba(126,245,231,.95), transparent);
-  box-shadow: 0 0 14px rgba(120,245,231,.36);
+  box-shadow: 0 0 14px rgba(var(--accent-rgb),.36);
   animation: launch-rule-arrive .75s var(--motion-ease) .36s both;
 }
 
@@ -125,14 +125,14 @@ main.view:not([hidden]) {
   font: 550 21px/1 Inter, "Segoe UI Symbol", sans-serif;
   letter-spacing: -.08em;
   text-indent: -.08em;
-  text-shadow: 0 0 14px rgba(120,245,231,.26);
+  text-shadow: 0 0 14px rgba(var(--accent-rgb),.26);
   transition: transform .55s var(--motion-ease), box-shadow .4s var(--motion-ease), border-color .4s var(--motion-ease);
 }
 .brand-chip .brand-mark { font-size: 19px; }
 .empty-icon .brand-mark { font-size: 46px; }
 .footer-brand .brand-mark, .pop-head .brand-mark { font-size: 18px; }
 .brand:hover .brand-mark,
-.brand-chip:hover .brand-mark { transform: rotate(-8deg) scale(1.06); box-shadow: 0 0 30px rgba(120, 245, 231, .2); }
+.brand-chip:hover .brand-mark { transform: rotate(-8deg) scale(1.06); box-shadow: 0 0 30px rgba(var(--accent-rgb), .2); }
 
 .hero-content > * {
   animation: content-arrive .72s var(--motion-ease) backwards;
@@ -189,20 +189,20 @@ main.view:not([hidden]) {
 button:focus-visible,
 a:focus-visible,
 [role="button"]:focus-visible {
-  outline: 2px solid rgba(120, 245, 231, .66);
+  outline: 2px solid rgba(var(--accent-rgb), .66);
   outline-offset: 3px;
   transition: outline-offset .18s var(--motion-ease);
 }
 
 .nav-search:focus-within {
-  box-shadow: 0 0 0 4px rgba(120, 245, 231, .055), 0 10px 32px rgba(0, 0, 0, .14);
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .055), 0 10px 32px rgba(0, 0, 0, .14);
 }
 .nav-search svg { transition: stroke .25s var(--motion-ease), transform .35s var(--motion-ease); }
 .nav-search:focus-within svg { stroke: var(--cyan); transform: scale(1.08); }
 input, textarea, select { transition: border-color .24s var(--motion-ease), box-shadow .3s var(--motion-ease), background-color .3s var(--motion-ease); }
 input:focus, textarea:focus, select:focus {
-  border-color: rgba(120, 245, 231, .42) !important;
-  box-shadow: 0 0 0 4px rgba(120, 245, 231, .07), 0 8px 26px rgba(0, 0, 0, .16);
+  border-color: rgba(var(--accent-rgb), .42) !important;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .07), 0 8px 26px rgba(0, 0, 0, .16);
 }
 
 /* New catalog items arrive with a short, restrained cascade. */
@@ -243,7 +243,7 @@ input:focus, textarea:focus, select:focus {
 .rail > .wide-card:hover,
 .rail > .poster-card:hover,
 .rail > .landscape-card:hover { z-index: 12; }
-.meta-card:hover { transform: scale(1.105); box-shadow: 0 34px 78px rgba(0,0,0,.53), 0 0 0 1px rgba(120,245,231,.14); }
+.meta-card:hover { transform: scale(1.105); box-shadow: 0 34px 78px rgba(0,0,0,.53), 0 0 0 1px rgba(var(--accent-rgb),.14); }
 .meta-card:active { transform: scale(1.055); }
 .wide-card:hover { transform: scale(1.075); }
 .poster-card:hover { transform: scale(1.09); }
@@ -323,12 +323,12 @@ input:focus, textarea:focus, select:focus {
 .card-flight.is-flying .meta-info, .card-flight.is-flying .meta-rating { opacity: 0; }
 .card-flight.is-settling { opacity: 0; transition: opacity .26s var(--motion-ease) !important; }
 .genre-pill { transition: background .25s var(--motion-ease), border-color .25s var(--motion-ease), transform .25s var(--motion-ease); }
-.genre-pill:hover { transform: translateY(-2px); background: rgba(120,245,231,.08); border-color: rgba(120,245,231,.22); }
+.genre-pill:hover { transform: translateY(-2px); background: rgba(var(--accent-rgb),.08); border-color: rgba(var(--accent-rgb),.22); }
 .install-feedback:not(:empty),
 .grid-status:not(:empty),
 .sources-empty { animation: content-arrive .38s var(--motion-ease) both; }
 .empty-card { transition: border-color .35s var(--motion-ease), transform .45s var(--motion-ease), box-shadow .45s var(--motion-ease); }
-.empty-card:hover { transform: translateY(-3px); border-color: rgba(120,245,231,.19); box-shadow: 0 36px 90px rgba(0,0,0,.44), inset 0 1px rgba(255,255,255,.08); }
+.empty-card:hover { transform: translateY(-3px); border-color: rgba(var(--accent-rgb),.19); box-shadow: 0 36px 90px rgba(0,0,0,.44), inset 0 1px rgba(255,255,255,.08); }
 
 /* Playback state changes use the same spring and remain readable over video. */
 .topbar { animation: chrome-arrive .62s var(--motion-ease) .02s backwards; }
@@ -361,8 +361,8 @@ input:focus, textarea:focus, select:focus {
 }
 .value-change { animation: value-arrive .46s var(--motion-ease) both; }
 .icon-button svg, .rail-button svg, .mini-button svg { transition: transform .32s var(--motion-snap), filter .3s var(--motion-ease); }
-.icon-button:hover svg, .rail-button:hover svg, .mini-button:hover svg { transform: scale(1.08); filter: drop-shadow(0 0 5px rgba(120,245,231,.24)); }
-.icon-button.interp-on { box-shadow: inset 0 0 18px rgba(120,245,231,.07), 0 0 20px rgba(120,245,231,.06); }
+.icon-button:hover svg, .rail-button:hover svg, .mini-button:hover svg { transform: scale(1.08); filter: drop-shadow(0 0 5px rgba(var(--accent-rgb),.24)); }
+.icon-button.interp-on { box-shadow: inset 0 0 18px rgba(var(--accent-rgb),.07), 0 0 20px rgba(var(--accent-rgb),.06); }
 .scene-index { transition: transform .35s var(--motion-snap), background .3s var(--motion-ease); }
 .scene-pill:hover .scene-index { transform: scale(1.07) rotate(-3deg); background: rgba(122,246,230,.12); }
 .lambda-settings { transition: opacity .32s var(--motion-ease), transform .48s var(--motion-ease), filter .35s var(--motion-ease); }

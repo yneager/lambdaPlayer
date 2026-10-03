@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LambdaPlayer VERSION 0.2.9 LANGUAGES CXX)
+project(LambdaPlayer VERSION 0.3.0 LANGUAGES CXX)
 set(LAMBDA_RELEASE_TAG "v${PROJECT_VERSION}" CACHE STRING "Release tag used for update comparison")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -74,6 +74,8 @@ qt_add_executable(LambdaPlayer WIN32
   src/locallibrary.h
   src/homepage.cpp
   src/homepage.h
+  src/downloadsbridge.cpp
+  src/downloadsbridge.h
   src/playerchrome.cpp
   src/playerchrome.h
   src/mainwindow.cpp
@@ -115,12 +117,19 @@ set(VUI_RESOURCE_FILES
   resources/vui/index.html
   resources/vui/home.css
   resources/vui/addons.css
+  resources/vui/downloads.css
+  resources/vui/downloads.js
+  resources/vui/motrix-client.js
   resources/vui/stremio.js
   resources/vui/player.html
   resources/vui/styles.css
   resources/vui/player.js
   resources/vui/home.js
   resources/vui/window.js
+  resources/vui/release-highlights.js
+  resources/vui/preferences.js
+  resources/vui/preferences.css
+  resources/vui/frame-clock.js
   resources/vui/window.css
   resources/vui/motion.css
 )
@@ -133,6 +142,14 @@ qt_add_resources(LambdaPlayer "vui_home"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/vui"
   FILES ${VUI_RESOURCE_FILES}
 )
+
+qt_add_resources(LambdaPlayer "download_config" PREFIX "/downloads"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/downloads"
+  FILES resources/downloads/aria2.conf)
+
+qt_add_resources(LambdaPlayer "release_notes" PREFIX "/releases"
+  BASE "${CMAKE_CURRENT_SOURCE_DIR}/docs/releases"
+  FILES docs/releases/v0.3.0.md)
 
 qt_add_resources(LambdaPlayer "frc_shaders"
   PREFIX "/frc"
@@ -169,6 +186,15 @@ if(MSVC)
 endif()
 
 set_target_properties(LambdaPlayer PROPERTIES OUTPUT_NAME "LambdaPlayer")
+if(WIN32)
+  set(LAMBDA_DOWNLOAD_ENGINE "${CMAKE_CURRENT_SOURCE_DIR}/tools/extra/win32/x64/aria2c.exe")
+  if(EXISTS "${LAMBDA_DOWNLOAD_ENGINE}")
+    add_custom_command(TARGET LambdaPlayer POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LAMBDA_DOWNLOAD_ENGINE}" "$<TARGET_FILE_DIR:LambdaPlayer>/aria2c.exe")
+  else()
+    message(WARNING "Downloads requires: node tools/download-engine/fetch-engine.mjs --platform win32 --arch x64")
+  endif()
+endif()
 qt_add_resources(LambdaPlayer "branding"
   PREFIX "/branding"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/branding"
@@ -281,6 +307,8 @@ if(LAMBDA_BUILD_TESTS)
   endif()
   add_test(NAME locallibrary COMMAND tst_locallibrary)
   qt_add_executable(tst_updatechecker tests/tst_updatechecker.cpp src/updatechecker.cpp src/updatechecker.h)
+  qt_add_resources(tst_updatechecker "test_release_notes" PREFIX "/releases"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/docs/releases" FILES docs/releases/v0.3.0.md)
   target_include_directories(tst_updatechecker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_link_libraries(tst_updatechecker PRIVATE Qt6::Gui Qt6::Network Qt6::Test)
   target_compile_definitions(tst_updatechecker PRIVATE LAMBDA_UPDATE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/updater/tls")

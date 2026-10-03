@@ -20,6 +20,7 @@ public slots:
     void check(bool manual = true, bool force = false);
     void setIncludeTests(bool enabled);
     void dismiss();
+    void dismissWhatsNew();
     void download();
     void releaseNotes();
     void cancelDownload();
@@ -33,6 +34,7 @@ private:
     QUrl endpoint_;
     QNetworkAccessManager network_;
     QJsonObject available_;
+    QJsonObject whatsNew_;
     QString status_ = "idle";
     QString errorStage_;
     bool includeTests_ = false;

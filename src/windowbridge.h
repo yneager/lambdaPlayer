@@ -4,6 +4,8 @@
 #include <QJsonObject>
 #include <QObject>
 #include <QRectF>
+#include <QChronoTimer>
+#include <QElapsedTimer>
 #include <QVariantList>
 
 // Exposed to each Vui web page through Qt WebChannel as "windowBridge".
@@ -20,6 +22,9 @@ class WindowBridge final : public QObject
     Q_PROPERTY(bool fullscreen READ isFullscreen NOTIFY stateChanged)
     Q_PROPERTY(bool mini READ isMini NOTIFY stateChanged)
     Q_PROPERTY(QJsonObject update READ updateState NOTIFY updateChanged)
+    Q_PROPERTY(bool uiFramePacing READ uiFramePacing CONSTANT)
+    Q_PROPERTY(double uiRefreshRate READ uiRefreshRate NOTIFY stateChanged)
+    Q_PROPERTY(QJsonObject preferences READ preferences NOTIFY preferencesChanged)
 
 public:
     explicit WindowBridge(QObject *parent = nullptr);
@@ -28,6 +33,9 @@ public:
     bool isFullscreen() const { return fullscreen_; }
     bool isMini() const { return mini_; }
     QJsonObject updateState() const { return update_; }
+    bool uiFramePacing() const;
+    double uiRefreshRate() const;
+    QJsonObject preferences() const;
     void setUpdateState(const QJsonObject &state) { update_ = state; emit updateChanged(); }
 
     void setWindowState(bool maximized, bool fullscreen, bool mini);
@@ -43,9 +51,13 @@ public slots:
     void downloadUpdate() { emit updateDownloadRequested(); }
     void cancelUpdate() { emit updateCancelRequested(); }
     void dismissUpdate() { emit updateDismissRequested(); }
+    void dismissWhatsNew() { emit whatsNewDismissRequested(); }
     void updateReleaseNotes() { emit updateNotesRequested(); }
     void setTestUpdates(bool enabled) { emit testUpdatesRequested(enabled); }
     void setDragRegions(const QVariantList &drag, const QVariantList &holes);
+    // Demand-driven animation clock for the local UI, paced to its monitor.
+    void requestUiFrame();
+    void setPreference(const QString &key, const QVariant &value);
 
 signals:
     void stateChanged();
@@ -54,19 +66,26 @@ signals:
     void updateDownloadRequested();
     void updateCancelRequested();
     void updateDismissRequested();
+    void whatsNewDismissRequested();
     void updateNotesRequested();
     void testUpdatesRequested(bool enabled);
     void minimizeRequested();
     void toggleMaximizeRequested();
     void closeRequested();
+    void uiFrame();
+    void preferencesChanged();
 
 private:
     static QList<QRectF> toRects(const QVariantList &list);
 
     QList<QRectF> drag_;
     QJsonObject update_;
+    QJsonObject preferences_;
     QList<QRectF> holes_;
     bool maximized_ = false;
     bool fullscreen_ = false;
     bool mini_ = false;
+    QChronoTimer uiFrameTimer_;
+    QElapsedTimer uiFrameClock_;
+    qint64 uiFrameDeadline_ = 0;
 };

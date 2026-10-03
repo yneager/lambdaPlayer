@@ -114,6 +114,9 @@ UpdateChecker::UpdateChecker(const QString &currentTag, QObject *parent, const Q
     if (newerThan(cached["tag"].toString(), currentTag_) && (includeTests_ || !cached["prerelease"].toBool())
         && settings().value("updates/cachedSource").toString() == endpoint_.toString()
         && httpsUrl(cached["downloadUrl"].toString()) && validDigest(cached["sha256"].toString())) available_ = cached;
+    const auto welcome = QJsonDocument::fromJson(settings().value("updates/pendingWelcome").toByteArray()).object();
+    if (welcome["tag"].toString() == currentTag_ && settings().value("updates/whatsNewSeen").toString() != currentTag_)
+        whatsNew_ = welcome;
 }
 QJsonObject UpdateChecker::state() const {
     auto result = available_;
@@ -124,17 +127,38 @@ QJsonObject UpdateChecker::state() const {
     result.insert("busy", busy_);
     result.insert("progress", progress_);
     result.insert("available", !available_.isEmpty());
+    result.insert("whatsNew", whatsNew_);
     result.insert("showNotification", !available_.isEmpty() && settings().value("updates/dismissed").toString() != available_["tag"].toString());
     return result;
 }
-void UpdateChecker::publish() { emit changed(state()); }
+void UpdateChecker::publish() {
+    if (!whatsNew_.isEmpty()) settings().setValue("updates/pendingWelcome", QJsonDocument(whatsNew_).toJson(QJsonDocument::Compact));
+    emit changed(state());
+}
+void UpdateChecker::dismissWhatsNew() {
+    settings().setValue("updates/whatsNewSeen", currentTag_);
+    settings().remove("updates/pendingWelcome");
+    whatsNew_ = {};
+    publish();
+}
 void UpdateChecker::start() {
     if (started_) return;
     started_ = true;
     // "Later" snoozes this session; remind again on the next launch.
     settings().remove("updates/dismissed");
-    publish();
     const QString lastJob = settings().value("updates/job").toString();
+    const QString previous = settings().value("updates/lastRunVersion").toString();
+    // Installer/manual upgrades do not create an updater job. Show the same
+    // welcome for an existing installation; fresh installations skip it.
+    if (lastJob.isEmpty() && settings().value("updates/whatsNewSeen").toString() != currentTag_
+        && ((!previous.isEmpty() && newerThan(currentTag_, previous))
+            || (previous.isEmpty() && settings().contains("updates/lastCheck")))) {
+        QFile notes(":/releases/" + currentTag_ + ".md");
+        if (notes.open(QIODevice::ReadOnly))
+            whatsNew_ = {{"tag", currentTag_}, {"notes", QString::fromUtf8(notes.readAll())}};
+    }
+    settings().setValue("updates/lastRunVersion", currentTag_);
+    publish();
     if (!lastJob.isEmpty()) {
         auto *resultTimer = new QTimer(this);
         connect(resultTimer, &QTimer::timeout, this, [this, resultTimer, lastJob] {
@@ -145,6 +169,15 @@ void UpdateChecker::start() {
             file.close();
             settings().remove("updates/job");
             resultTimer->stop(); resultTimer->deleteLater();
+            if (result["ok"].toBool()) {
+                auto cached = QJsonDocument::fromJson(settings().value("updates/completedRelease").toByteArray()).object();
+                if (cached.isEmpty()) cached = QJsonDocument::fromJson(settings().value("updates/cached").toByteArray()).object();
+                if (cached["tag"].toString() == currentTag_ && settings().value("updates/whatsNewSeen").toString() != currentTag_) {
+                    whatsNew_ = {{"tag", currentTag_}, {"notes", cached["notes"]}};
+                    publish();
+                }
+            }
+            settings().remove("updates/completedRelease");
             emit notify(result["message"].toString(), !result["ok"].toBool());
             const QString base = qEnvironmentVariable("LAMBDA_DATA_DIR", QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation));
             const QFileInfo jobInfo(lastJob);
@@ -301,6 +334,7 @@ void UpdateChecker::prepareUpdate(const QString &job) {
 #endif
         if(!helper.startDetached()) { failUpdate("Cannot start the update restart. Your current version is unchanged."); return; }
         settings().setValue("updates/job",job);
+        settings().setValue("updates/completedRelease", QJsonDocument(available_).toJson(QJsonDocument::Compact));
         settings().sync();
         status_="restarting"; publish();
         emit notify("Update ready. LAMBDA will restart and keep your library and saved playback positions.",false);

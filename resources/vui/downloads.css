@@ -1,0 +1,15 @@
+/* Downloads uses the Home/Add-ons tokens, glass cards, chips and pill buttons. */
+.download-folder,.download-stats,.download-detail{color:rgba(241,244,252,.55);font-size:11px;overflow-wrap:anywhere}
+.download-folder{display:block;margin-top:14px}
+.download-list{margin-top:18px}
+[data-download-filters]{margin-left:clamp(22px,5.5vw,88px);margin-right:clamp(22px,5.5vw,88px)}
+.download-card{padding:20px;border-radius:18px;display:flex;flex-direction:column;gap:12px}
+.download-heading{display:flex;justify-content:space-between;gap:20px;font-size:13px}
+.download-heading strong{overflow-wrap:anywhere;min-width:0}
+.download-status{color:var(--cyan);font-size:10px;text-transform:capitalize;flex-shrink:0}
+.download-card progress{width:100%;height:5px;border:0;border-radius:4px;overflow:hidden;appearance:none}
+.download-card progress::-webkit-progress-bar{background:rgba(255,255,255,.08)}
+.download-card progress::-webkit-progress-value{background:var(--cyan);border-radius:4px}
+.download-card .install-actions{margin:0;flex-wrap:wrap}
+.download-card .download-detail{display:block}
+@media(max-width:700px){.download-heading{gap:10px}.download-card{padding:16px}}

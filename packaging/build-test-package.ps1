@@ -21,6 +21,7 @@ $payload = Join-Path $package 'LAMBDA Player'
 New-Item -ItemType Directory -Force $payload | Out-Null
 Copy-Item "$app\*" $payload -Recurse -Force
 Copy-Item $BuildExe $payload -Force
+Copy-Item "$repo\tools\extra\win32\x64\aria2c.exe" $payload -Force
 Copy-Item "$repo\resources\rife\rife.vpy" "$payload\rife\rife.vpy" -Force
 $deploy = Join-Path $QtDir 'bin\windeployqt.exe'
 & $deploy --release --no-translations --no-compiler-runtime "$payload\LambdaPlayer.exe"

@@ -134,6 +134,8 @@ jobs:
           $actual=(Get-FileHash resources\vui\InterVariable.woff2 -Algorithm SHA256).Hash
           Write-Host "InterVariable.woff2 SHA-256: $actual"
           if($actual -ne $expected){throw "Inter font SHA-256 mismatch: expected $expected got $actual"}
+      - name: Fetch pinned Motrix download engine
+        run: node tools/download-engine/fetch-engine.mjs --platform win32 --arch x64
       - name: Configure
         shell: pwsh
         run: |
@@ -148,11 +150,23 @@ jobs:
           $env:PATH = "$env:QT_ROOT_DIR\bin;$env:PATH"
           $env:QT_QPA_PLATFORM = 'offscreen'
           ctest --test-dir build -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "Native tests failed" }
+          node --test tests/vui/downloads.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Download engine integration test failed" }
+          node --test tests/vui/frame-clock.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "UI frame clock tests failed" }
+          node --test tests/vui/release-highlights.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Release highlights tests failed" }
+          node --test tests/vui/torrent.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "Torrent peer integration test failed" }
       - name: Package
         shell: pwsh
         run: |
           mkdir portable
           Copy-Item build\Release\LambdaPlayer.exe portable\
+          Copy-Item tools\extra\win32\x64\aria2c.exe portable\
+          Copy-Item licenses portable\ -Recurse -Force
+          Copy-Item THIRD_PARTY_NOTICES.md portable\ -Force
           Copy-Item "$env:MPV_DLL" portable\libmpv-2.dll
           & "$env:QT_ROOT_DIR\bin\windeployqt.exe" --release --no-translations --compiler-runtime portable\LambdaPlayer.exe
           $webProcess=Get-ChildItem portable -Recurse -Filter QtWebEngineProcess.exe|Select-Object -First 1

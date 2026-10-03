@@ -117,7 +117,7 @@
     pop = document.createElement('div');
     pop.className = 'lambda-popover glass';
     pop.setAttribute('role', 'dialog');
-    pop.setAttribute('aria-label', 'About LAMBDA Player');
+    pop.setAttribute('aria-label', 'Settings');
     pop.innerHTML =
       '<div class="pop-head"><span class="brand-mark" aria-hidden="true">λ</span><div><strong>LAMBDA Player</strong><small class="pop-version"></small></div></div>' +
       '<p>Local video player built on libmpv, with optional real-time RIFE frame interpolation on any Vulkan GPU.</p>' +
@@ -125,6 +125,7 @@
       '<p class="pop-update-status" data-update-status></p><label class="pop-test-updates"><input type="checkbox" data-test-updates /> Include test releases</label>' +
       '<div class="pop-actions"><button type="button" class="pop-btn" data-pop="updates">Check for updates</button><button type="button" class="pop-btn primary" data-pop="update-download" hidden>Download update</button><button type="button" class="pop-btn primary" data-pop="open">Open video</button><button type="button" class="pop-btn" data-pop="licenses">Third-party licenses</button></div>';
     document.body.appendChild(pop);
+    window.LambdaPreferences?.populate(pop);
     q('.pop-version', pop).textContent = 'Version ' + ((home && home.version) || '');
     q('[data-pop="open"]', pop).addEventListener('click', () => { closeAbout(); call('openVideo'); });
     q('[data-pop="updates"]', pop).addEventListener('click', () => window.LambdaWindow.checkUpdates());
@@ -201,7 +202,7 @@
   function smoothWheel() {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const root = document.scrollingElement || document.documentElement;
-    let target = 0, current = 0, velocity = 0, frame = 0, last = 0;
+    let target = 0, current = 0, painted = 0, velocity = 0, frame = 0, last = 0;
 
     const innerScroller = (el, dy) => {
       for (; el && el !== document.body && el !== root; el = el.parentElement) {
@@ -213,12 +214,12 @@
     };
 
     const step = now => {
-      if (Math.abs(window.scrollY - current) > 3) {
+      if (Math.abs(window.scrollY - painted) > 3) {
         // A scrollbar drag, keyboard command or navigation took over.
         frame = 0;
         return;
       }
-      const dt = Math.min(.04, Math.max(.001, (now - (last || now - 16.7)) / 1000));
+      const dt = Math.min(.04, Math.max(.001, (now - last) / 1000));
       last = now;
       target = Math.max(0, Math.min(root.scrollHeight - window.innerHeight, target));
       const omega = 18;
@@ -232,19 +233,22 @@
         velocity = 0;
       }
       window.scrollTo({top: current, behavior: 'instant'});
-      current = window.scrollY;
+      // Keep subpixel spring state between high-refresh frames. Rounding the
+      // integrator to scrollY every tick makes small 120 Hz steps stick.
+      painted = window.scrollY;
       frame = Math.abs(target - current) < 1 && Math.abs(velocity) < 4
         ? 0 : requestAnimationFrame(step);
     };
 
     window.addEventListener('wheel', e => {
+      if (window.LambdaPreferences?.state.reduceMotion || window.LambdaPreferences?.state.smoothScroll === false) return;
       if (e.ctrlKey || e.defaultPrevented || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
       const wheelDelta = e.wheelDeltaY || e.wheelDelta || 0;
       const notch = e.deltaMode !== 0 || Math.abs(wheelDelta) >= 120
           || Math.abs(e.deltaY) >= 24;
       if (!notch || innerScroller(e.target, e.deltaY)) return;
       e.preventDefault();
-      if (!frame) { target = current = window.scrollY; velocity = 0; last = 0; }
+      if (!frame) { target = current = painted = window.scrollY; velocity = 0; last = performance.now(); }
       const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? window.innerHeight : 1;
       target = Math.max(0, Math.min(root.scrollHeight - window.innerHeight, target + e.deltaY * unit * 1.6));
       if (!frame) frame = requestAnimationFrame(step);
@@ -269,6 +273,7 @@
     new QWebChannel(qt.webChannelTransport, channel => {
       home = channel.objects.homeBridge;
       library = channel.objects.library;
+      if (window.lambdaDownloads) window.lambdaDownloads.attach(channel.objects.downloads, home);
       if (library) { library.changed.connect(renderLibrary); library.state(renderLibrary); }
       if (window.LambdaWindow && channel.objects.windowBridge) window.LambdaWindow.attach(channel.objects.windowBridge);
       if (window.lambdaStremio && channel.objects.stremio) window.lambdaStremio.attach(channel.objects.stremio, home);

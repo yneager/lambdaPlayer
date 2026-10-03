@@ -1,5 +1,6 @@
 #include "homepage.h"
 #include "locallibrary.h"
+#include "downloadsbridge.h"
 #include "windowbridge.h"
 
 #include <QCoreApplication>
@@ -95,10 +96,18 @@ public:
     }
 
     std::function<void(const QString &)> localFileDropped;
+    std::function<void(const QString &)> downloadDropped;
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override
     {
+        if (event->mimeData()->hasText()) {
+            const QUrl url(event->mimeData()->text().trimmed());
+            if (QStringList{"http", "https", "ftp", "magnet"}.contains(url.scheme().toLower())) {
+                event->acceptProposedAction();
+                return;
+            }
+        }
         if (event->mimeData()->hasUrls()) {
             const auto urls = event->mimeData()->urls();
             if (!urls.isEmpty() && urls.first().isLocalFile()) {
@@ -114,6 +123,12 @@ protected:
         const auto urls = event->mimeData()->urls();
         if (!urls.isEmpty() && urls.first().isLocalFile() && localFileDropped) {
             localFileDropped(urls.first().toLocalFile());
+            event->acceptProposedAction();
+            return;
+        }
+        const QString text = !urls.isEmpty() ? urls.first().toString() : event->mimeData()->text();
+        if (downloadDropped && QStringList{"http", "https", "ftp", "magnet"}.contains(QUrl(text.trimmed()).scheme().toLower())) {
+            downloadDropped(text);
             event->acceptProposedAction();
             return;
         }
@@ -171,6 +186,8 @@ HomePage::HomePage(QObject *addonsBridge, QWidget *parent)
     library_ = new LocalLibrary(this);
     channel->registerObject("library", library_);
     channel->registerObject("homeBridge", bridge);
+    auto *downloads = new DownloadsBridge(this);
+    channel->registerObject("downloads", downloads);
     channel->registerObject("windowBridge", windowBridge_);
     if (addonsBridge) {
         // Registered before the page loads so qwebchannel.js sees it.
@@ -188,8 +205,10 @@ HomePage::HomePage(QObject *addonsBridge, QWidget *parent)
     connect(bridge, &HomeBridge::openRecentRequested, this, &HomePage::openPathRequested);
     connect(bridge, &HomeBridge::openLicensesRequested, this, &HomePage::openLicensesRequested);
 
-    view->localFileDropped = [this](const QString &path) {
-        emit openPathRequested(path);
+    view->downloadDropped = [downloads](const QString &text) { downloads->receiveDrop(text); };
+    view->localFileDropped = [this, downloads](const QString &path) {
+        if (path.endsWith(".torrent", Qt::CaseInsensitive)) downloads->receiveDrop(path);
+        else emit openPathRequested(path);
     };
 
     layout->addWidget(view_);

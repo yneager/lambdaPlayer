@@ -63,6 +63,20 @@ code from it was copied into LAMBDA Player.
 - License: SIL Open Font License 1.1
 - License copy: `licenses/Inter-LICENSE.txt`
 
+## Download manager
+
+Motrix Turbo 2.0.0-beta.46 download RPC client, JSON-RPC protocol, pause
+reconciliation, byte formatter, engine configuration and fetch tooling are
+copied under `third_party/motrix`, `resources/downloads`, and
+`tools/download-engine`. Copyright 2018-present Dr_rOot, MIT;
+see `licenses/Motrix-LICENSE.txt`.
+
+The bundled aria2 engine is the Motrix fork `v1.37.0-motrix.16`, pinned with
+archive and binary SHA-256 hashes in `tools/download-engine/engine.lock.json`.
+Its source is available at https://github.com/motrixapp/aria2/tree/v1.37.0-motrix.16.
+It is GPL-2.0-or-later with an OpenSSL linking exception; see
+`licenses/aria2-COPYING` and `licenses/aria2-LICENSE.OpenSSL`.
+
 ## Streaming engine (added in v0.2.5)
 
 | Component | Version / commit | License | Files in package |

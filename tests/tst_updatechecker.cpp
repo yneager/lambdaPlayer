@@ -202,6 +202,61 @@ private slots:
         installed.start();
         QVERIFY(!installed.state()["showNotification"].toBool());
     }
+    void completedUpdateShowsHighlightsOnce() {
+        const QString job = profile_.path() + "/test-job";
+        QDir().mkpath(job);
+        QFile result(job + "/result.json"); QVERIFY(result.open(QIODevice::WriteOnly));
+        result.write("{\"ok\":true,\"message\":\"Update complete\"}"); result.close();
+        QSettings settings(profile_.path()+"/player.ini",QSettings::IniFormat);
+        settings.setValue("updates/job", job);
+        settings.setValue("updates/completedRelease", QJsonDocument(QJsonObject{{"tag", "v0.3.0"}, {"notes", "- Downloader+"}}).toJson());
+        settings.sync();
+        Feed feed; feed.body="[]";
+        UpdateChecker installed("v0.3.0",nullptr,feed.url());
+        installed.start();
+        QTRY_COMPARE_WITH_TIMEOUT(installed.state()["whatsNew"].toObject()["tag"].toString(),QString("v0.3.0"),6000);
+        QVERIFY(!installed.state()["showNotification"].toBool());
+        installed.dismissWhatsNew();
+        QVERIFY(installed.state()["whatsNew"].toObject().isEmpty());
+        QCOMPARE(settings.value("updates/whatsNewSeen").toString(),QString("v0.3.0"));
+        UpdateChecker restarted("v0.3.0",nullptr,feed.url());
+        restarted.start();
+        QVERIFY(restarted.state()["whatsNew"].toObject().isEmpty());
+    }
+    void manualUpgradeShowsWelcomeUntilAcknowledged() {
+        QSettings settings(profile_.path()+"/player.ini",QSettings::IniFormat);
+        settings.setValue("updates/lastRunVersion", "v0.2.9"); settings.sync();
+        Feed feed; feed.body="[]";
+        UpdateChecker upgraded("v0.3.0",nullptr,feed.url()); upgraded.start();
+        QCOMPARE(upgraded.state()["whatsNew"].toObject()["tag"].toString(),QString("v0.3.0"));
+        QVERIFY(upgraded.state()["whatsNew"].toObject()["notes"].toString().contains("Downloader+"));
+        QVERIFY(!upgraded.state()["showNotification"].toBool());
+        UpdateChecker unread("v0.3.0",nullptr,feed.url()); unread.start();
+        QVERIFY(!unread.state()["whatsNew"].toObject().isEmpty());
+        unread.dismissWhatsNew();
+        UpdateChecker acknowledged("v0.3.0",nullptr,feed.url()); acknowledged.start();
+        QVERIFY(acknowledged.state()["whatsNew"].toObject().isEmpty());
+    }
+    void freshInstallationSkipsWelcome() {
+        Feed feed; feed.body="[]";
+        UpdateChecker installed("v0.3.0",nullptr,feed.url()); installed.start();
+        QVERIFY(installed.state()["whatsNew"].toObject().isEmpty());
+        QVERIFY(!installed.state()["showNotification"].toBool());
+    }
+    void failedUpdateDoesNotShowWhatsNew() {
+        const QString job = profile_.path() + "/failed-job";
+        QDir().mkpath(job);
+        QFile result(job + "/result.json"); QVERIFY(result.open(QIODevice::WriteOnly));
+        result.write("{\"ok\":false,\"message\":\"Rolled back\"}"); result.close();
+        QSettings settings(profile_.path()+"/player.ini",QSettings::IniFormat);
+        settings.setValue("updates/job", job); settings.sync();
+        Feed feed; feed.body="[]";
+        UpdateChecker installed("v0.2.9",nullptr,feed.url());
+        QSignalSpy messages(&installed,&UpdateChecker::notify);
+        installed.start();
+        QTRY_COMPARE_WITH_TIMEOUT(messages.count(),1,6000);
+        QVERIFY(installed.state()["whatsNew"].toObject().isEmpty());
+    }
     void backgroundFailureQuietManualFailureVisible() {
         Feed feed; feed.body="{}";
         UpdateChecker checker("v0.2.7",nullptr,feed.url());

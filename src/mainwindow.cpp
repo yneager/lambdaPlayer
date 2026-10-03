@@ -2639,6 +2639,7 @@ void MainWindow::connectWindowBridge(WindowBridge *bridge)
     connect(bridge, &WindowBridge::updateDownloadRequested, updates_, &UpdateChecker::download);
     connect(bridge, &WindowBridge::updateCancelRequested, updates_, &UpdateChecker::cancelDownload);
     connect(bridge, &WindowBridge::updateDismissRequested, updates_, &UpdateChecker::dismiss);
+    connect(bridge, &WindowBridge::whatsNewDismissRequested, updates_, &UpdateChecker::dismissWhatsNew);
     connect(bridge, &WindowBridge::updateNotesRequested, updates_, &UpdateChecker::releaseNotes);
     connect(bridge, &WindowBridge::testUpdatesRequested, updates_, &UpdateChecker::setIncludeTests);
     connect(bridge, &WindowBridge::minimizeRequested, this, &QWidget::showMinimized);

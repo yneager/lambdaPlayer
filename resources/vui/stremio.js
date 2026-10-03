@@ -149,6 +149,7 @@
 
     if (view === 'discover' && !discover.initialized) openDiscover(null);
     if (view === 'addons') { renderAddons(); loadAddonCatalogs(false); }
+    if (view === 'downloads' && window.lambdaDownloads) window.lambdaDownloads.show();
     if (view === 'home') observeRows();
     refreshWindow();
   }
