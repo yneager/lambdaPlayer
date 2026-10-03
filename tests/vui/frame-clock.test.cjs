@@ -10,8 +10,8 @@ function fixture(cssAnimations = []) {
   const listeners = {};
   const document = {hidden: false, documentElement: {}, getAnimations: () => cssAnimations, addEventListener(name, handler) { listeners[name] = handler; }};
   const window = {requestAnimationFrame(fn) { nativeCallback = fn; return 17; }, cancelAnimationFrame() { nativeCallback = null; }, addEventListener() {}};
-  let mutate;
-  class MutationObserver { constructor(handler) { mutate = handler; } observe() {} }
+  let mutate, observation;
+  class MutationObserver { constructor(handler) { mutate = handler; } observe(target, options) { observation = options; } }
   class CSSAnimation {}
   class CSSTransition {}
   for (const animation of cssAnimations) Object.setPrototypeOf(animation, animation.kind === 'transition' ? CSSTransition.prototype : CSSAnimation.prototype);
@@ -20,6 +20,7 @@ function fixture(cssAnimations = []) {
   return {window, document,
     attach(enabled = true) { window.LambdaFrameClock.attach({uiFramePacing: enabled, uiFrame: {connect(fn) { frameCallback = fn; }}, requestUiFrame() { requests++; }}); },
     get requests() { return requests; },
+    get observation() { return observation; },
     frame(timestamp) { now = timestamp; (frameCallback || nativeCallback)(); },
     visibility(hidden) { document.hidden = hidden; listeners.visibilitychange(); }
     , mutate() { mutate(); }
@@ -73,4 +74,10 @@ test('native fallback when disabled and attachment preserves pending callbacks',
   assert.equal(calls, 1); assert.equal(f.requests, 0);
   f.window.requestAnimationFrame(() => calls++); f.attach(); assert.equal(f.requests, 1);
   f.frame(24); assert.equal(calls, 2);
+});
+
+test('inline progress and scroll styles do not trigger global animation scans', () => {
+  const f = fixture(); f.attach();
+  assert.deepEqual(Array.from(f.observation.attributeFilter), ['class', 'hidden']);
+  assert.equal(f.observation.childList, true);
 });

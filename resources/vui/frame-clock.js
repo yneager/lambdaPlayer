@@ -108,7 +108,9 @@
       const rescan = () => { scanNeeded = true; schedule(); };
       // Preserve CSS easing, durations and keyframes while advancing their
       // timelines on the same bounded clock as scrolling and JS transitions.
-      new MutationObserver(rescan).observe(document.documentElement, {subtree: true, childList: true, attributes: true});
+      // Inline style updates from scrolling/progress must not trigger a full
+      // animation/layout scan on every frame. CSS lifecycle events cover them.
+      new MutationObserver(rescan).observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'hidden']});
       for (const event of ['animationstart', 'animationcancel', 'transitionrun', 'transitioncancel']) document.addEventListener(event, rescan, true);
       window.addEventListener('resize', rescan);
       scanNeeded = true;

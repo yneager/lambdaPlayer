@@ -36,8 +36,8 @@
         '<p>Limited to your monitor’s refresh rate. Higher rates use more CPU; video frame rate is unchanged.</p>' +
         '<label class="preference-row">Smooth wheel scrolling<input type="checkbox" data-preference="smoothScroll"></label>' +
         '<label class="preference-row">Reduce motion<input type="checkbox" data-preference="reduceMotion"></label>' +
-        '<h3>Downloader+</h3><label class="preference-row">Encrypted torrent connections<input type="checkbox" data-preference="torrentEncryption"></label>' +
-        '<p>Restart LAMBDA to apply. Turn off if a torrent cannot connect to peers. Downloads have no speed cap.</p><button type="button" class="pop-btn" data-preferences-folder>Choose download folder…</button>';
+        '<h3>Downloader+</h3><label class="preference-row">Prefer encrypted torrent connections<input type="checkbox" data-preference="torrentEncryption"></label>' +
+        '<p>Restart LAMBDA to apply. Encryption is preferred; other peers can still connect. Downloads have no speed cap.</p><button type="button" class="pop-btn" data-preferences-folder>Choose download folder…</button>';
       pop.querySelector('.pop-head').after(panel);
       panel.querySelectorAll('[data-palette-choice]').forEach(button => button.onclick = () => set('palette', button.dataset.paletteChoice));
       panel.querySelectorAll('[data-preference]').forEach(input => input.onchange = () => set(input.dataset.preference,

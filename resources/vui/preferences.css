@@ -14,6 +14,7 @@
 .preference-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0;font-size:12px}
 .preference-row select{background:#151923;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px;font:inherit}
 .preference-row input{accent-color:var(--cyan)}
+.reduce-motion .launch-intro{display:none!important}
 .reduce-motion *, .reduce-motion *::before,.reduce-motion *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
 .episode-list,.sources-list,.lambda-popover{scrollbar-width:auto;scrollbar-color:auto}
 .episode-list::-webkit-scrollbar,.sources-list::-webkit-scrollbar,.lambda-popover::-webkit-scrollbar{width:8px;background:transparent}

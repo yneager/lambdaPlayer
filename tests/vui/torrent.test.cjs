@@ -40,9 +40,9 @@ test('torrent engine transfers verified data between local peers without a speed
     const child = spawn(path.resolve('tools/extra/win32/x64/aria2c.exe'), ['--no-conf=true', '--enable-rpc=true',
       `--rpc-listen-port=${port}`, '--rpc-secret=fixture', `--dir=${folder}`, `--listen-port=${peerPort}`,
       '--enable-dht=false', '--enable-dht6=false', '--bt-enable-lpd=false', '--disable-ipv6=true',
-      '--bt-max-peers=128', '--disk-cache=32M', '--max-download-limit=0', '--max-overall-download-limit=0',
-      '--socket-recv-buffer-size=1M', '--bt-force-encryption=true',
-      '--bt-request-peer-speed-limit=10M', '--file-allocation=none', '--check-integrity=true', '--seed-time=60', '--seed-ratio=0', '--console-log-level=error'
+      '--bt-max-peers=256', '--disk-cache=64M', '--max-download-limit=0', '--max-overall-download-limit=0',
+      '--socket-recv-buffer-size=1M', '--bt-force-encryption=false', '--bt-require-crypto=false', '--bt-min-crypto-level=arc4',
+      '--bt-request-peer-speed-limit=20M', '--file-allocation=none', '--check-integrity=true', '--seed-time=60', '--seed-ratio=0', '--console-log-level=error'
     ], {windowsHide: true, stdio: 'ignore'});
     children.push(child);
     const rpc = async (method, params = []) => {
@@ -71,7 +71,7 @@ test('torrent engine transfers verified data between local peers without a speed
     assert.equal(Number(status.completedLength), bytes.length);
     assert.deepEqual(fs.readFileSync(path.join(download.folder, 'peer-fixture.bin')), bytes);
     const options = await download.rpc('getGlobalOption');
-    assert.equal(options['bt-max-peers'], '128'); assert.equal(options['max-overall-download-limit'], '0');
+    assert.equal(options['bt-max-peers'], '256'); assert.equal(options['max-overall-download-limit'], '0');
     for (const engine of [seed, download]) await engine.rpc('shutdown');
   } finally {
     for (const child of children) if (child.exitCode === null) { child.kill(); await once(child, 'exit'); }

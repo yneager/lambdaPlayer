@@ -56,10 +56,18 @@
       const restored = await client.multicallSettled([
         {method: 'aria2.tellActive', params: []}, {method: 'aria2.tellWaiting', params: [0, 1000]}
       ]);
+      const tuning = {'bt-max-peers': '256', 'bt-request-peer-speed-limit': '20M', 'max-download-limit': '0',
+        'bt-force-encryption': 'false', 'bt-require-crypto': 'false', 'bt-min-crypto-level': config.encrypted ? 'arc4' : 'plain'};
       await Promise.allSettled(restored.filter(result => result.status === 'fulfilled').flatMap(result => result.value)
-        .filter(task => task.bittorrent).map(task => client.changeOption(task.gid,
-          {'bt-max-peers': '128', 'bt-request-peer-speed-limit': '10M', 'max-download-limit': '0',
-            'bt-require-crypto': config.encrypted ? 'true' : 'false'})));
+        .filter(task => task.bittorrent).map(async task => {
+          const options = await client.getOption(task.gid);
+          // RPC returns sizes as bytes; equivalent tuning must not restart peers.
+          const changed = Object.fromEntries(Object.entries(tuning).filter(([key, value]) =>
+            options[key] !== (value.endsWith('M') ? String(Number(value.slice(0, -1)) * 1024 * 1024) : value)));
+          // Prefer encrypted handshakes, but allow legacy peers to connect too.
+          // Old encryption-only tasks migrate once; later launches retain peers.
+          if (Object.keys(changed).length) await client.changeOption(task.gid, changed);
+        }));
       controls(true); message('Ready to download.');
       q('[data-download-retry]').hidden = true;
       await poll();
@@ -149,15 +157,33 @@
   }
   function render() {
     const list = q('[data-download-list]');
-    // Avoid replacing focused buttons while the user interacts with transfers.
-    if (list.contains(document.activeElement)) return;
-    list.replaceChildren();
+    const existing = new Map(Array.from(list.querySelectorAll('.download-card')).map(card => [card.dataset.gid, card]));
+    list.querySelectorAll(':scope > p').forEach(node => node.remove());
     const visible = tasks.filter(task => filter === 'all' || task.status === filter);
     if (!visible.length) list.append(element('p', 'page-lede', tasks.length ? 'No transfers in this view.' : 'Your downloads will appear here.'));
     for (const task of visible) {
       const files = (task.files || []).filter(file => file.selected !== 'false');
       const name = task.bittorrent?.info?.name || files[0]?.path?.split(/[\\/]/).pop() || files[0]?.uris?.[0]?.uri || 'Fetching torrent metadata…';
-      const card = element('article', 'glass download-card');
+      let card = existing.get(task.gid);
+      existing.delete(task.gid);
+      // Keep cards, focus and scroll position stable during the one-second poll.
+      if (card && card.dataset.status === task.status) {
+        const title = card.querySelector('.download-heading strong');
+        if (title.textContent !== name) title.textContent = name;
+        const progress = card.querySelector('progress');
+        progress.setAttribute('aria-label', name + ' progress');
+        progress.max = Number(task.totalLength) || 1;
+        progress.value = Number(task.completedLength) || 0;
+        const peers = task.bittorrent ? ` · ${task.connections || 0} peers · ${task.numSeeders || 0} seeders` : '';
+        const detail = task.errorMessage || `${formatBytes(task.completedLength)} / ${formatBytes(task.totalLength)} · ${formatSpeed(task.downloadSpeed)}${peers}`;
+        const label = card.querySelector('.download-detail');
+        if (label.textContent !== detail) label.textContent = detail;
+        continue;
+      }
+      const previous = card;
+      card = element('article', 'glass download-card');
+      card.dataset.gid = task.gid;
+      card.dataset.status = task.status;
       const heading = element('div', 'download-heading');
       heading.append(element('strong', '', name), element('span', 'download-status', task.status));
       const progress = document.createElement('progress');
@@ -183,8 +209,9 @@
       button(['active', 'waiting', 'paused'].includes(task.status) ? 'Cancel' : 'Remove', () =>
         ['active', 'waiting', 'paused'].includes(task.status) ? client.remove(task.gid) : client.removeDownloadResult(task.gid));
       card.append(heading, progress, element('small', 'download-detail', detail), actions);
-      list.append(card);
+      if (previous) previous.replaceWith(card); else list.append(card);
     }
+    existing.forEach(card => card.remove());
   }
   function attach(next, homeBridge) {
     bridge = next; home = homeBridge;
