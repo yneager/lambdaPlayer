@@ -1,12 +1,36 @@
 # LAMBDA Player
 
-**Latest version: [v0.2.9](https://github.com/yneager/lambdaPlayer/releases/tag/v0.2.9)**
+**Latest release: [v0.3.1](https://github.com/yneager/lambdaPlayer/releases/tag/v0.3.1)**
 
-Download [LAMBDA-Player-Setup-0.2.9-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.2.9/LAMBDA-Player-Setup-0.2.9-x64.exe), or click **Update** in an updater-enabled installation. This single file installs the complete Windows x64 app with its dependencies.
+Download [LAMBDA-Player-Setup-0.3.1-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.3.1/LAMBDA-Player-Setup-0.3.1-x64.exe), or click **Update** in an updater-enabled installation. This single file installs the complete Windows x64 app with its dependencies.
 
-LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. It is also a Stremio add-on client: installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player.
+LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. Installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player. Downloader+ handles file links, magnets and torrent files in a dedicated tab beside Add-ons.
 
 ## Version History
+
+### Unreleased — Startup and tab performance
+
+These changes are being tested in the local development checkout and are not included in the downloadable v0.3.1 release.
+
+- Pause offscreen interface animations and reduce work during the launch animation.
+- Reuse unchanged add-on cards when switching tabs and avoid unnecessary scroll/layout work.
+- Remove duplicate interface preference updates.
+
+### v0.3.1 — Reduced motion, steadier UI and torrent connections
+
+- Fix the launch logo covering the app when Reduced motion is enabled, including after restarting.
+- Reduce background animation work and update download progress cards without rebuilding the list.
+- Allow more torrent peers, prefer encrypted connections with compatibility fallback, and avoid resetting unchanged downloads on restart.
+- [Release notes](docs/releases/v0.3.1.md).
+
+### v0.3.0 — Downloader+, interface settings and update dialogs
+
+- Add Downloader+ for links, magnets and torrent files, with destination confirmation when dropping a download.
+- Save download history and support pause, resume, retry and opening completed videos.
+- Add a settings button, four color palettes, interface frame-rate options, smooth scrolling and Reduced motion.
+- Use themed episode scrollbars and prominent launch-time update dialogs with readable highlights and a What's new popup after upgrading.
+- Fix the Build and Run.cmd launcher.
+- [Release notes](docs/releases/v0.3.0.md).
 
 ### v0.2.9 — Motion, scene switches, subtitles, and displayed FPS
 
@@ -90,11 +114,11 @@ LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with 
 
 ### v0.2.1 — LAMBDA Player / Complete Vui CSS
 
-This is the new active version line. The product name is now **LAMBDA Player** and both major application surfaces use the current Vui HTML/CSS as their visual source.
+This milestone established the maintained version line. The product name is now **LAMBDA Player** and both major application surfaces use the current Vui HTML/CSS as their visual source.
 
 **Changed**
 - Renamed the application from LAMBDA Player to **LAMBDA Player**. The Windows executable is `LambdaPlayer.exe` and CI artifacts use `LAMBDA-Player-Windows-x64`.
-- Reset the active project version to **v0.2.1**. The abandoned/current-branch v0.3.x labels are no longer part of the maintained version history.
+- Reset the active project version to **v0.2.1**. Earlier abandoned branch labels were excluded from the maintained history; the later v0.3.0 and v0.3.1 releases above belong to this reset line.
 - Home continues to render the real Vui `index.html` + `home.css` locally through Qt WebEngine.
 - Player now renders the real Vui `player.html` + `styles.css` as Chromium/WebEngine chrome instead of visually approximating that CSS with Qt widgets.
 - A small local WebChannel bridge maps the Vui player controls to the existing C++/libmpv backend: Open, Home, play/pause, next, mute/volume, exact seek, speed, audio tracks, subtitles, external subtitles, RIFE interpolation and fullscreen.
@@ -167,7 +191,7 @@ This is the original LAMBDA Player base-player milestone before RIFE was added.
 **Verified**
 - The user runtime-tested the v0.1 playback baseline, including MKV seeking, embedded/external subtitles, multiple audio tracks and fullscreen controls.
 
-> **Versioning rule:** v0.2.1 is the reset/current line for LAMBDA Player. Future versions are added above it; v0.2.0 and v0.1.0 remain as the retained earlier milestones. Detailed development history remains in [CHANGELOG.md](CHANGELOG.md).
+> **Versioning rule:** v0.2.1 established the reset version line for LAMBDA Player. Future versions are added above it; v0.2.0 and v0.1.0 remain as the retained earlier milestones. Detailed development history remains in [CHANGELOG.md](CHANGELOG.md).
 
 ## Automatic Windows build and releases
 
@@ -175,9 +199,21 @@ Open **Actions → Build Windows Portable → Run workflow** for a normal test b
 
 When it finishes, download the **LAMBDA-Player-Windows-x64** artifact, extract it and run `LambdaPlayer.exe`.
 
-For a public GitHub Release, first update the version in `CMakeLists.txt`, commit it, then push a matching tag such as `v0.2.1`. The same workflow builds and smoke-tests the portable package, creates `LAMBDA-Player-Windows-x64-v0.2.1.zip`, and publishes it on the repository's **Releases** page automatically. The workflow rejects a tag whose version does not match `CMakeLists.txt`.
+For a public GitHub Release, first update the version in `CMakeLists.txt`, commit it, then push a matching tag such as `v0.3.1`. The same workflow builds and smoke-tests the portable package, creates `LAMBDA-Player-Windows-x64-v0.3.1.zip`, and publishes it on the repository's **Releases** page automatically. The workflow rejects a tag whose version does not match `CMakeLists.txt`.
 
 No local Qt, Visual Studio, CMake, libmpv, Python or VapourSynth installation is required for this test route. The portable package contains the frame-interpolation runtime.
+
+## Building locally
+
+The GitHub Actions route above builds the complete package without installing development tools on your PC. For an already configured local checkout, double-click **Build and Run.cmd** to build, deploy to `_local/app` and launch the player.
+
+The local helper expects Qt 6.8.3 MSVC x64, Visual Studio Build Tools, and the mpv dependencies/runtime prepared in `_local`. Paths are configured at the top of `build.ps1`. A missing download engine is fetched and verified automatically; this step requires Node.js and network access.
+
+```powershell
+.\build.ps1 -NoRun        # Build and deploy without launching
+.\build.ps1 -Reconfigure  # Refresh CMake configuration, build and launch
+.\build.ps1 -Test         # Build and run native unit tests
+```
 
 ## Current Features
 
@@ -191,8 +227,26 @@ No local Qt, Visual Studio, CMake, libmpv, Python or VapourSynth installation is
 - Fullscreen with overlay controls (slide-in/out, auto-hide)
 - Hardware decoding through mpv (`hwdec=auto-safe`)
 - Keyboard: Space, Left/Right, M, F, Esc
-- Real-time RIFE interpolation: original frame rate, doubled frame rate, or 60 fps
+- Frame interpolation through RIFE, Universal D3D11 and AMD FRC, including experimental Fast RIFE
 - Stremio add-on client: catalogs, search, details, seasons/episodes, streams and subtitles from installed add-ons
+- Local movie/series library, artwork and saved playback progress
+- Downloader+ with saved tasks, torrent support and drag-and-drop destination confirmation
+- Four interface palettes, smooth scrolling, Reduced motion and 60/120/240 fps interface targets
+- Verified in-app updates with launch-time reminders and a What's new dialog after upgrading
+
+## Downloader+
+
+Open **Downloader+** beside Add-ons to add an HTTP, HTTPS or FTP link, a magnet link, or a `.torrent` file. You can also drop a torrent file or link text into the app. The download dialog lets you confirm or change the destination before the transfer starts.
+
+Download cards show progress and speed, with controls to pause, resume, cancel or retry. Tasks and history are saved across restarts. Open the destination folder from a card, or play a completed video directly in LAMBDA.
+
+Downloader+ uses the bundled aria2 engine and the MIT-licensed Motrix RPC client. It is separate from the Stremio streaming engine described below. Torrent connections prefer encryption with fallback for compatible peers. Speeds depend on the available peers and network, and may increase as the torrent finds more peers.
+
+## Interface settings and updates
+
+Use the **settings gear** in the top bar to choose **Mint**, **Ocean**, **Violet** or **Amber**, toggle smooth scrolling or Reduced motion, and select a **60**, **120** or **240 fps** interface target. Preferences persist across restarts. The target is limited by the display's refresh rate; actual smoothness also depends on hardware and workload. This setting controls interface motion; video interpolation is selected separately under **Smoothness** in the player.
+
+LAMBDA checks for updates at launch. When a newer release is available, a centered dialog shows brief feature highlights and an Update button. Choosing Later brings the reminder back on the next launch. After upgrading, a What's new dialog presents the changes until acknowledged.
 
 ## Stremio Add-ons
 
@@ -210,29 +264,23 @@ The built-in engine (`lambda-stream-server.exe`, the open-source [stream-server]
 
 Add-on configuration pages open in a separate window that cannot access LAMBDA; pressing the page's Install button installs the configured add-on.
 
-## Frame Interpolation (RIFE)
+## Frame Interpolation
 
-The `Frame Interpolation` selector is labelled with the current video's real frame rates. For a 24 fps video, for example:
+Open **Smoothness** in the player to select an interpolation mode. Available choices include:
 
-- **Original (24 fps)** — normal libmpv playback with no interpolation overhead.
-- **48 fps (RIFE)** — doubles the source frame rate with the bundled RIFE v4.6 model.
-- **60 fps (RIFE)** — interpolates supported sources below 60 fps to 60 fps.
+- **Original** — source frame rate with no interpolation overhead.
+- **RIFE** — double the source rate or convert supported sources below 60 fps to 60 fps, using the bundled RIFE v4.6 model through VapourSynth.
+- **Universal D3D11** — double the source rate or target 60, 120 or 200 fps on supported hardware.
+- **AMD FRC** — double the source rate or target 60, 120 or 200 fps when the AMD AMF backend is available.
+- **Fast RIFE, experimental** — a 240 fps target with a quality control. Performance depends on the GPU and video resolution; stable 4K/240 fps is not guaranteed.
 
-Before a file is loaded the entries read **Original**, **Double frame rate (RIFE)** and **60 fps (RIFE)**.
+RIFE modes use a labelled mpv filter (`@novarife`) running the bundled `rife/rife.vpy` script. Audio, subtitles, seeking and final rendering remain handled by libmpv. These modes require a Vulkan-capable GPU with a current vendor driver. If the RIFE runtime/filter cannot initialize, the player falls back to normal playback.
 
-Pipeline:
-
-`media file → libmpv decode → mpv VapourSynth filter → VapourSynth → VapourSynth-RIFE-ncnn-Vulkan / ncnn / Vulkan → libmpv rendering`
-
-LAMBDA Player does not contain a custom RIFE implementation. It adds a labelled mpv filter (`@novarife`) that runs the bundled `rife/rife.vpy` script. Audio, subtitles, seeking, timing and final rendering remain handled by libmpv.
-
-Requirements: a Vulkan-capable NVIDIA, AMD or Intel GPU with a current vendor driver and enough performance for the video's resolution. If interpolation cannot initialize, LAMBDA Player falls back to normal playback.
-
-Not included yet: additional target frame rates, display-Hz matching, GPU/model selection, quality presets, realtime upscaling and settings persistence.
+The Smoothness menu also lets you configure a saved keyboard shortcut to toggle interpolation. Interface frame-rate preferences do not change the video's interpolation mode.
 
 ## Third-party Components
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the `licenses/` directory for the bundled components and their licenses. Third-party interpolation dependencies are pinned and SHA-256 verified by the GitHub Actions packaging workflow.
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the `licenses/` directory for the bundled components and their licenses. Third-party interpolation dependencies and the Downloader+ engine are pinned and SHA-256 verified during packaging. Downloader+ includes code from the MIT-licensed Motrix client and bundles aria2; their notices and license files are included with the app.
 
 ## Project Documentation
 
