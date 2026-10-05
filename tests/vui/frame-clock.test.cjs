@@ -5,21 +5,23 @@ const path = require('node:path');
 const {test} = require('node:test');
 const source = fs.readFileSync(path.join(__dirname, '../../resources/vui/frame-clock.js'), 'utf8');
 
-function fixture(cssAnimations = []) {
+function fixture(cssAnimations = [], viewport = false) {
   let nativeCallback, frameCallback, now = 0, requests = 0;
   const listeners = {};
   const document = {hidden: false, documentElement: {}, getAnimations: () => cssAnimations, addEventListener(name, handler) { listeners[name] = handler; }};
   const window = {requestAnimationFrame(fn) { nativeCallback = fn; return 17; }, cancelAnimationFrame() { nativeCallback = null; }, addEventListener() {}};
-  let mutate, observation;
+  let mutate, observation, intersect;
+  class IntersectionObserver { constructor(handler) { intersect = handler; } observe() {} unobserve() {} }
   class MutationObserver { constructor(handler) { mutate = handler; } observe(target, options) { observation = options; } }
   class CSSAnimation {}
   class CSSTransition {}
   for (const animation of cssAnimations) Object.setPrototypeOf(animation, animation.kind === 'transition' ? CSSTransition.prototype : CSSAnimation.prototype);
-  vm.runInNewContext(source, {window, document, performance: {now: () => now}, setTimeout, MutationObserver, CSSAnimation, CSSTransition,
+  vm.runInNewContext(source, {window, document, performance: {now: () => now}, setTimeout, MutationObserver, CSSAnimation, CSSTransition, IntersectionObserver: viewport ? IntersectionObserver : undefined, innerHeight: 840, innerWidth: 1360,
     getComputedStyle(target) { return {animationName: target.name, animationPlayState: target.paused ? 'paused' : 'running'}; }});
   return {window, document,
     attach(enabled = true) { window.LambdaFrameClock.attach({uiFramePacing: enabled, uiFrame: {connect(fn) { frameCallback = fn; }}, requestUiFrame() { requests++; }}); },
     get requests() { return requests; },
+    viewport(timestamp, isIntersecting) { now = timestamp; intersect(cssAnimations.map(animation => ({target: animation.effect.target, isIntersecting}))); },
     get observation() { return observation; },
     frame(timestamp) { now = timestamp; (frameCallback || nativeCallback)(); },
     visibility(hidden) { document.hidden = hidden; listeners.visibilitychange(); }
@@ -80,4 +82,17 @@ test('inline progress and scroll styles do not trigger global animation scans', 
   const f = fixture(); f.attach();
   assert.deepEqual(Array.from(f.observation.attributeFilter), ['class', 'hidden']);
   assert.equal(f.observation.childList, true);
+});
+
+test('offscreen CSS animations stop the clock and resume without a time jump', () => {
+  const motion = {animationName: 'motion', effect: {target: {name: 'motion', getBoundingClientRect: () => ({width: 20, height: 20, top: 2000, bottom: 2020, left: 0, right: 20})}, getComputedTiming: () => ({endTime: Infinity})}, currentTime: 0, playbackRate: 1, playState: 'running', pause() { this.playState = 'paused'; }};
+  const f = fixture([motion], true); f.attach(); f.frame(0);
+  assert.equal(f.requests, 1); assert.equal(motion.currentTime, 0);
+  f.viewport(200, true); f.frame(220);
+  assert.equal(motion.currentTime, 20);
+  f.viewport(240, false); f.frame(260);
+  assert.equal(motion.currentTime, 20);
+  const requests = f.requests;
+  f.viewport(1000, true); assert.equal(f.requests, requests + 1); f.frame(1020);
+  assert.equal(motion.currentTime, 40);
 });

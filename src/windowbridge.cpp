@@ -1,4 +1,5 @@
 #include "windowbridge.h"
+#include "shortcutsettings.h"
 #include <QGuiApplication>
 #include <QApplication>
 #include <QScreen>
@@ -57,10 +58,50 @@ WindowBridge::WindowBridge(QObject *parent)
     : QObject(parent)
 {
     preferences_ = loadPreferences();
+    QSettings shortcuts(preferencePath(), QSettings::IniFormat);
+    if (!shortcuts.contains("shortcuts/interpolation")) {
+        const auto root = qEnvironmentVariable("LAMBDA_DATA_DIR");
+        QSettings legacy = root.isEmpty() ? QSettings(QSettings::IniFormat, QSettings::UserScope, "LAMBDA", "LAMBDA Player")
+            : QSettings(QDir(root).filePath("player.ini"), QSettings::IniFormat);
+        QString normalized;
+        if (legacy.contains("player/interpolationShortcut")
+            && ShortcutSettings::validate(ShortcutSettings::defaults(), "interpolation",
+                legacy.value("player/interpolationShortcut").toString(), &normalized).isEmpty())
+            shortcuts.setValue("shortcuts/interpolation", normalized);
+    }
+    shortcuts_ = ShortcutSettings::load(shortcuts);
     uiFrameClock_.start();
     uiFrameTimer_.setSingleShot(true);
     uiFrameTimer_.setTimerType(Qt::PreciseTimer);
     connect(&uiFrameTimer_, &QChronoTimer::timeout, this, &WindowBridge::uiFrame);
+}
+
+QJsonObject WindowBridge::setShortcut(const QString &action, const QString &sequence)
+{
+    QString normalized;
+    const auto error = ShortcutSettings::validate(shortcuts_, action, sequence, &normalized);
+    if (!error.isEmpty()) return {{"ok", false}, {"error", error}};
+    QSettings settings(preferencePath(), QSettings::IniFormat);
+    settings.setValue("shortcuts/" + action, normalized); settings.sync();
+    broadcastShortcuts();
+    return {{"ok", true}, {"sequence", normalized}};
+}
+void WindowBridge::resetShortcuts()
+{
+    QSettings settings(preferencePath(), QSettings::IniFormat);
+    const auto defaults = ShortcutSettings::defaults();
+    for (auto it = defaults.begin(); it != defaults.end(); ++it)
+        settings.setValue("shortcuts/" + it.key(), it.value().toString());
+    settings.sync(); broadcastShortcuts();
+}
+void WindowBridge::broadcastShortcuts()
+{
+    QSettings settings(preferencePath(), QSettings::IniFormat);
+    const auto state = ShortcutSettings::load(settings);
+    for (auto *widget : QApplication::topLevelWidgets())
+        for (auto *bridge : widget->findChildren<WindowBridge *>()) {
+            bridge->shortcuts_ = state; emit bridge->shortcutsChanged();
+        }
 }
 
 bool WindowBridge::uiFramePacing() const

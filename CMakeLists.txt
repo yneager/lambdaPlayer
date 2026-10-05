@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(LambdaPlayer VERSION 0.3.1 LANGUAGES CXX)
+project(LambdaPlayer VERSION 0.3.2 LANGUAGES CXX)
 set(LAMBDA_RELEASE_TAG "v${PROJECT_VERSION}" CACHE STRING "Release tag used for update comparison")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -149,7 +149,7 @@ qt_add_resources(LambdaPlayer "download_config" PREFIX "/downloads"
 
 qt_add_resources(LambdaPlayer "release_notes" PREFIX "/releases"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/docs/releases"
-  FILES docs/releases/v0.3.0.md docs/releases/v0.3.1.md)
+  FILES docs/releases/v0.3.0.md docs/releases/v0.3.1.md docs/releases/v0.3.2.md)
 
 qt_add_resources(LambdaPlayer "frc_shaders"
   PREFIX "/frc"
@@ -291,6 +291,10 @@ option(LAMBDA_BUILD_TESTS "Build the Stremio addon protocol tests" ON)
 if(LAMBDA_BUILD_TESTS)
   enable_testing()
   find_package(Qt6 REQUIRED COMPONENTS Test)
+  qt_add_executable(tst_shortcuts tests/tst_shortcuts.cpp src/windowbridge.cpp src/windowbridge.h)
+  target_include_directories(tst_shortcuts PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  target_link_libraries(tst_shortcuts PRIVATE Qt6::Widgets Qt6::Test)
+  add_test(NAME shortcuts COMMAND tst_shortcuts)
   qt_add_executable(tst_mpvglstate tests/tst_mpvglstate.cpp)
   target_include_directories(tst_mpvglstate PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_link_libraries(tst_mpvglstate PRIVATE Qt6::Gui Qt6::OpenGL Qt6::Test)
@@ -308,7 +312,7 @@ if(LAMBDA_BUILD_TESTS)
   add_test(NAME locallibrary COMMAND tst_locallibrary)
   qt_add_executable(tst_updatechecker tests/tst_updatechecker.cpp src/updatechecker.cpp src/updatechecker.h)
   qt_add_resources(tst_updatechecker "test_release_notes" PREFIX "/releases"
-    BASE "${CMAKE_CURRENT_SOURCE_DIR}/docs/releases" FILES docs/releases/v0.3.0.md docs/releases/v0.3.1.md)
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/docs/releases" FILES docs/releases/v0.3.0.md docs/releases/v0.3.1.md docs/releases/v0.3.2.md)
   target_include_directories(tst_updatechecker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
   target_link_libraries(tst_updatechecker PRIVATE Qt6::Gui Qt6::Network Qt6::Test)
   target_compile_definitions(tst_updatechecker PRIVATE LAMBDA_UPDATE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/updater/tls")

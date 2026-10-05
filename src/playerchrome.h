@@ -37,6 +37,9 @@ public:
     void setQuality(const QString &primary, const QString &secondary);
     void setFrcDiagnostics(const QJsonObject &stats);
     void setInterpolationShortcut(const QString &shortcut);
+    void setSubtitleAppearance(const QJsonObject &appearance);
+    void setPictureSettings(const QJsonObject &picture);
+    void openShortcutEditor(const QString &action = {});
     void setChapter(const QString &index, const QString &title);
     void setChromeVisible(bool visible);
     void setSettings(const QStringList &audio, int audioIndex,
@@ -65,6 +68,8 @@ signals:
     void speedRequested(double value);
     void audioTrackRequested(int index);
     void subtitleTrackRequested(int index);
+    void subtitleAppearanceRequested(const QJsonObject &appearance);
+    void pictureRequested(const QJsonObject &picture);
     void interpolationRequested(int index);
     void fastQualityRequested(int quality);
     void videoRectChanged(int x, int y, int width, int height, int radius);
@@ -115,4 +120,6 @@ private:
     int subtitleIndex_ = 0;
     int interpolationIndex_ = 0;
     int fastQuality_ = 1;
+    QJsonObject subtitleAppearance_;
+    QJsonObject picture_;
 };

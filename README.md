@@ -1,20 +1,25 @@
 # LAMBDA Player
 
-**Latest release: [v0.3.1](https://github.com/yneager/lambdaPlayer/releases/tag/v0.3.1)**
+**Latest release: [v0.3.2](https://github.com/yneager/lambdaPlayer/releases/tag/v0.3.2)**
 
-Download [LAMBDA-Player-Setup-0.3.1-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.3.1/LAMBDA-Player-Setup-0.3.1-x64.exe), or click **Update** in an updater-enabled installation. This single file installs the complete Windows x64 app with its dependencies.
+Download [LAMBDA-Player-Setup-0.3.2-x64.exe](https://github.com/yneager/lambdaPlayer/releases/download/v0.3.2/LAMBDA-Player-Setup-0.3.2-x64.exe), or click **Update** in an updater-enabled installation. This single file installs the complete Windows x64 app with its dependencies.
 
 LAMBDA Player is a Windows video player built with C++20, Qt 6 and libmpv, with optional real-time RIFE frame interpolation through mpv's VapourSynth filter. Installed Stremio add-ons provide catalogs, details, streams and subtitles, and their streams play in the same libmpv player. Downloader+ handles file links, magnets and torrent files in a dedicated tab beside Add-ons.
 
 ## Version History
 
-### Unreleased — Startup and tab performance
+### v0.3.2 — Playback controls, file selection and UI performance
 
-These changes are being tested in the local development checkout and are not included in the downloadable v0.3.1 release.
-
+- Choose individual torrent files before downloading, with file sizes and a selected total; magnet links fetch the file list first.
+- Adjust subtitle size, position, black background and timing in the existing Subtitles menu. Appearance is saved; timing resets for each new video.
+- Adjust brightness, contrast, saturation and gamma under Picture, with saved values and a reset button.
+- Edit keyboard shortcuts from Home settings or the player; disable actions, check for conflicts and restore defaults.
 - Pause offscreen interface animations and reduce work during the launch animation.
 - Reuse unchanged add-on cards when switching tabs and avoid unnecessary scroll/layout work.
 - Remove duplicate interface preference updates.
+- Remove the central pause/resume overlay from the video.
+- Improve Build and Run with runtime checks, launch confirmation and diagnostic logs.
+- [Release notes](docs/releases/v0.3.2.md).
 
 ### v0.3.1 — Reduced motion, steadier UI and torrent connections
 
@@ -208,6 +213,8 @@ No local Qt, Visual Studio, CMake, libmpv, Python or VapourSynth installation is
 The GitHub Actions route above builds the complete package without installing development tools on your PC. For an already configured local checkout, double-click **Build and Run.cmd** to build, deploy to `_local/app` and launch the player.
 
 The local helper expects Qt 6.8.3 MSVC x64, Visual Studio Build Tools, and the mpv dependencies/runtime prepared in `_local`. Paths are configured at the top of `build.ps1`. A missing download engine is fetched and verified automatically; this step requires Node.js and network access.
+
+Normal builds compile the player; `-Test` also builds the test targets. The launcher checks deployed runtime files and confirms that a player window opens. Deployment diagnostics are saved to `_local/qt-deploy.log`, and launch results to `_local/logs/player-*.log`.
 
 ```powershell
 .\build.ps1 -NoRun        # Build and deploy without launching

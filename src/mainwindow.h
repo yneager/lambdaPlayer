@@ -136,6 +136,13 @@ private:
     void showInterpolationError(const QString &message);
     void showToast(const QString &message, bool warning = false);
     void updateSubtitleMargin();
+    void applySubtitleAppearance();
+    QJsonObject subtitleAppearance_;
+    QJsonObject picture_;
+    void applyPictureSettings();
+    void reloadShortcuts();
+    bool handleShortcut(QKeyEvent *event);
+    QHash<QString, QKeySequence> shortcutBindings_;
     bool keyEventOwnerIsThisWindow(QObject *watched) const;
 
     QString dialogStartDirectory() const;
@@ -202,7 +209,6 @@ private:
     QWidget *topBar_ = nullptr;
     QWidget *sideRail_ = nullptr;
     QWidget *qualityBadge_ = nullptr;
-    QWidget *centerState_ = nullptr;
     QWidget *controls_ = nullptr;
     QWidget *settingsPanel_ = nullptr;
 
@@ -210,8 +216,6 @@ private:
     QLabel *mediaTitle_ = nullptr;
     QLabel *qualityPrimary_ = nullptr;
     QLabel *qualitySecondary_ = nullptr;
-    QLabel *centerKicker_ = nullptr;
-    QLabel *centerText_ = nullptr;
     QLabel *chapterIndexLabel_ = nullptr;
     QLabel *chapterTitleLabel_ = nullptr;
     QLabel *timelinePositionLabel_ = nullptr;
@@ -221,7 +225,6 @@ private:
     QPushButton *homeButton_ = nullptr;
     QPushButton *playButton_ = nullptr;
     QPushButton *railPlayerButton_ = nullptr;
-    QPushButton *centerPlayButton_ = nullptr;
     QPushButton *muteButton_ = nullptr;
     QPushButton *fullscreenButton_ = nullptr;
     QPushButton *loadSubtitleButton_ = nullptr;

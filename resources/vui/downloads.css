@@ -13,3 +13,10 @@
 .download-card .install-actions{margin:0;flex-wrap:wrap}
 .download-card .download-detail{display:block}
 @media(max-width:700px){.download-heading{gap:10px}.download-card{padding:16px}}
+
+.download-confirm{max-height:calc(100vh - 48px);overflow-y:auto;width:min(680px,calc(100vw - 40px))}
+.download-file-toolbar{display:flex;align-items:center;gap:10px;margin:20px 0 10px}.download-file-toolbar strong{margin-right:auto}
+.download-file-list{max-height:280px;overflow-y:auto;border:1px solid var(--line);border-radius:14px;padding:6px}
+.download-file{display:flex;align-items:center;gap:12px;padding:10px;border-radius:9px;font-size:12px;cursor:pointer}.download-file:hover{background:rgba(255,255,255,.04)}
+.download-file input{accent-color:var(--cyan);flex-shrink:0}.download-file span{flex:1;overflow-wrap:anywhere;min-width:0}.download-file small{color:var(--muted);white-space:nowrap}
+.download-file-list::-webkit-scrollbar,.download-confirm::-webkit-scrollbar{width:6px}.download-file-list::-webkit-scrollbar-thumb,.download-confirm::-webkit-scrollbar-thumb{background:rgba(var(--accent-rgb),.3);border-radius:8px}

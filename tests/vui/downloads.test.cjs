@@ -37,7 +37,7 @@ test('Motrix engine: download, pause/resume, faults, cancellation and SQLite res
     child = spawn(path.join(root, 'tools/extra/win32/x64/aria2c.exe'), [
       '--no-conf=true', '--enable-rpc=true', '--rpc-listen-all=false', `--rpc-listen-port=${port}`, '--rpc-secret=test-token',
       '--enable-sqlite3-persistence=true', `--sqlite3-db-path=${path.join(directory, 'aria2.db')}`,
-      '--sqlite3-history-limit=10000', `--dir=${directory}`, '--file-allocation=none', '--enable-dht=false', '--enable-dht6=false', '--disable-ipv6=true', '--console-log-level=error'
+      '--sqlite3-history-limit=10000', '--rpc-save-upload-metadata=true', `--dir=${directory}`, '--file-allocation=none', '--enable-dht=false', '--enable-dht6=false', '--disable-ipv6=true', '--console-log-level=error'
     ], {windowsHide: true, stdio: 'ignore'});
     const transport = {
       connected: false,
@@ -60,6 +60,29 @@ test('Motrix engine: download, pause/resume, faults, cancellation and SQLite res
   }
   try {
     await boot();
+    // Preview a multi-file torrent without connecting to a public swarm.
+    const encode = value => {
+      if (Buffer.isBuffer(value)) return Buffer.concat([Buffer.from(value.length + ':'), value]);
+      if (typeof value === 'string') return encode(Buffer.from(value));
+      if (typeof value === 'number') return Buffer.from('i' + value + 'e');
+      if (Array.isArray(value)) return Buffer.concat([Buffer.from('l'), ...value.map(encode), Buffer.from('e')]);
+      return Buffer.concat([Buffer.from('d'), ...Object.keys(value).sort().flatMap(key => [encode(key), encode(value[key])]), Buffer.from('e')]);
+    };
+    const piece = require('node:crypto').createHash('sha1').update(Buffer.alloc(16384)).digest();
+    const torrent = encode({info:{name:'selection-test', 'piece length':16384, pieces:Buffer.concat(Array(8).fill(piece)),
+      files:[{length:65536,path:['one.mkv']},{length:65536,path:['two.srt']}]}}).toString('base64');
+    const preview = await client.addTorrent(torrent, [], {pause:'true'});
+    assert.equal((await client.tellStatus(preview)).status, 'paused');
+    assert.equal((await client.getFiles(preview)).length, 2);
+    assert.equal(fs.existsSync(path.join(directory, 'selection-test')), false);
+    await client.changeOption(preview, {'select-file':'2'});
+    assert.equal((await client.getFiles(preview)).map(file => file.selected).join(','), 'false,true');
+    await shutdown(); await boot();
+    assert.equal((await client.tellStatus(preview).catch(error => { throw new Error('Restored preview: ' + error.message); })).status, 'paused');
+    assert.equal((await client.getFiles(preview)).map(file => file.selected).join(','), 'false,true');
+    await client.forceRemove(preview);
+    await client.removeDownloadResult(preview).catch(error => { assert.match(error.message, /not found/); });
+    assert.equal((await client.tellWaiting(0, 100)).some(task => task.gid === preview), false);
     const uri = `http://127.0.0.1:${server.address().port}/video.mp4`;
     const gid = await client.addUri([uri], {out: 'video.mp4', 'max-download-limit': '64K'});
     await until(async () => Number((await client.tellStatus(gid)).completedLength) > 0);

@@ -56,14 +56,14 @@
 }
 
 @keyframes launch-mark-arrive {
-  from { opacity: 0; transform: translateY(18px) scale(.72) rotate(-11deg); filter: blur(12px); }
-  70% { opacity: 1; transform: translateY(-3px) scale(1.06) rotate(2deg); filter: blur(0); }
-  to { opacity: 1; transform: translateY(0) scale(1) rotate(0); filter: blur(0); }
+  from { opacity: 0; transform: translateY(18px) scale(.72) rotate(-11deg); }
+  70% { opacity: 1; transform: translateY(-3px) scale(1.06) rotate(2deg); }
+  to { opacity: 1; transform: translateY(0) scale(1) rotate(0); }
 }
 
 @keyframes launch-name-arrive {
-  from { opacity: 0; transform: translateY(12px); letter-spacing: .5em; }
-  to { opacity: 1; transform: translateY(0); letter-spacing: .32em; }
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes launch-rule-arrive {
@@ -85,6 +85,8 @@
   background: radial-gradient(circle at 50% 48%, #15212a 0, #080d14 28%, #050609 68%);
   animation: launch-away .68s var(--motion-ease) 1.05s forwards;
 }
+.launch-intro { will-change: opacity; }
+.launch-lambda, .launch-name, .launch-rule { will-change: transform, opacity; }
 .launch-emblem { display: grid; justify-items: center; gap: 12px; }
 .launch-lambda {
   color: #bbfff6;
@@ -335,18 +337,6 @@ input:focus, textarea:focus, select:focus {
 .side-rail { animation: rail-arrive .65s var(--motion-ease) .1s backwards; }
 .quality-badge { animation: badge-arrive .65s var(--motion-ease) .16s backwards; }
 .control-deck { animation: content-arrive .72s var(--motion-ease) .12s backwards; }
-.center-state { transition: opacity .38s var(--motion-ease), transform .52s var(--motion-ease); }
-.center-state.lambda-hidden {
-  display: flex !important;
-  opacity: 0;
-  transform: translate(-50%, -42%) scale(.96);
-  pointer-events: none;
-}
-.center-state.lambda-hidden * { pointer-events: none !important; }
-.center-state:not(.lambda-hidden) { animation: center-arrive .48s var(--motion-ease) both; }
-.player.is-paused .play-inner { box-shadow: 0 18px 52px rgba(70,226,205,.3), inset 0 1px rgba(255,255,255,.92); }
-.player.is-finished .play-inner { animation: ripple-soft .9s var(--motion-ease) 1; }
-.player.is-loading .center-copy span { animation: value-arrive .5s var(--motion-ease) infinite alternate; }
 .player.lambda-chrome-hidden .topbar { transform: translateY(-18px) scale(.99); }
 .player.lambda-chrome-hidden .control-deck { transform: translateY(22px) scale(.99); }
 .player.lambda-chrome-hidden .quality-badge { transform: translate(10px, -50%); }

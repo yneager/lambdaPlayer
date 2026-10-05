@@ -25,6 +25,7 @@ class WindowBridge final : public QObject
     Q_PROPERTY(bool uiFramePacing READ uiFramePacing CONSTANT)
     Q_PROPERTY(double uiRefreshRate READ uiRefreshRate NOTIFY stateChanged)
     Q_PROPERTY(QJsonObject preferences READ preferences NOTIFY preferencesChanged)
+    Q_PROPERTY(QJsonObject shortcuts READ shortcuts NOTIFY shortcutsChanged)
 
 public:
     explicit WindowBridge(QObject *parent = nullptr);
@@ -36,6 +37,8 @@ public:
     bool uiFramePacing() const;
     double uiRefreshRate() const;
     QJsonObject preferences() const;
+    QJsonObject shortcuts() const { return shortcuts_; }
+    bool keyboardInputActive() const { return keyboardInputActive_; }
     void setUpdateState(const QJsonObject &state) { update_ = state; emit updateChanged(); }
 
     void setWindowState(bool maximized, bool fullscreen, bool mini);
@@ -58,6 +61,9 @@ public slots:
     // Demand-driven animation clock for the local UI, paced to its monitor.
     void requestUiFrame();
     void setPreference(const QString &key, const QVariant &value);
+    QJsonObject setShortcut(const QString &action, const QString &sequence);
+    void resetShortcuts();
+    void setKeyboardInputActive(bool active) { keyboardInputActive_ = active; }
 
 signals:
     void stateChanged();
@@ -74,6 +80,7 @@ signals:
     void closeRequested();
     void uiFrame();
     void preferencesChanged();
+    void shortcutsChanged();
 
 private:
     static QList<QRectF> toRects(const QVariantList &list);
@@ -81,6 +88,9 @@ private:
     QList<QRectF> drag_;
     QJsonObject update_;
     QJsonObject preferences_;
+    QJsonObject shortcuts_;
+    bool keyboardInputActive_ = false;
+    void broadcastShortcuts();
     QList<QRectF> holes_;
     bool maximized_ = false;
     bool fullscreen_ = false;

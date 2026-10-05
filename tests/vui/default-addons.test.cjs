@@ -12,7 +12,7 @@ const elements = {
 };
 const context = {
   state:{addons:[], defaults:[], defaultsInstalled:false, installingDefaults:false},
-  bridge:{}, q: selector => elements[selector], qa: () => buttons,
+  renderedAddons:null, bridge:{}, q: selector => elements[selector], qa: () => buttons,
   el() { return {}; }, addonCard() { return {}; }, renderServer() {}, refreshWindow() {},
 };
 vm.createContext(context);

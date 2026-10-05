@@ -35,6 +35,8 @@ signals:
     void speedRequested(double value);
     void audioTrackRequested(int index);
     void subtitleTrackRequested(int index);
+    void subtitleAppearanceRequested(const QJsonObject &appearance);
+    void pictureRequested(const QJsonObject &picture);
     void interpolationRequested(int index);
     void fastQualityRequested(int quality);
     void videoRectRequested(int x, int y, int width, int height, int radius);
@@ -48,6 +50,8 @@ public slots:
     void speed(double value) { emit speedRequested(value); }
     void selectAudio(int index) { emit audioTrackRequested(index); }
     void selectSubtitle(int index) { emit subtitleTrackRequested(index); }
+    void adjustSubtitles(const QJsonObject &appearance) { emit subtitleAppearanceRequested(appearance); }
+    void adjustPicture(const QJsonObject &picture) { emit pictureRequested(picture); }
     void selectInterpolation(int index) { emit interpolationRequested(index); }
     void selectFastQuality(int quality) { emit fastQualityRequested(quality); }
     void reportVideoRect(double x, double y, double width, double height, double radius)
@@ -190,6 +194,8 @@ PlayerChrome::PlayerChrome(QWidget *parent)
     connect(bridge, &LambdaBridge::speedRequested, this, &PlayerChrome::speedRequested);
     connect(bridge, &LambdaBridge::audioTrackRequested, this, &PlayerChrome::audioTrackRequested);
     connect(bridge, &LambdaBridge::subtitleTrackRequested, this, &PlayerChrome::subtitleTrackRequested);
+    connect(bridge, &LambdaBridge::subtitleAppearanceRequested, this, &PlayerChrome::subtitleAppearanceRequested);
+    connect(bridge, &LambdaBridge::pictureRequested, this, &PlayerChrome::pictureRequested);
     connect(bridge, &LambdaBridge::interpolationRequested, this, &PlayerChrome::interpolationRequested);
     connect(bridge, &LambdaBridge::fastQualityRequested, this, &PlayerChrome::fastQualityRequested);
     connect(bridge, &LambdaBridge::videoRectRequested, this, &PlayerChrome::videoRectChanged);
@@ -215,6 +221,20 @@ void PlayerChrome::setInterpolationShortcut(const QString &shortcut)
     if (interpolationShortcut_ == shortcut) return;
     interpolationShortcut_ = shortcut;
     pushSettings();
+}
+void PlayerChrome::setSubtitleAppearance(const QJsonObject &appearance)
+{
+    subtitleAppearance_ = appearance;
+    pushSettings();
+}
+void PlayerChrome::setPictureSettings(const QJsonObject &picture)
+{
+    picture_ = picture; pushSettings();
+}
+void PlayerChrome::openShortcutEditor(const QString &action)
+{
+    const auto argument = QString::fromUtf8(QJsonDocument(QJsonArray{action}).toJson(QJsonDocument::Compact));
+    runScript(QString("window.LambdaShortcuts&&LambdaShortcuts.open(%1[0]);").arg(argument));
 }
 void PlayerChrome::setFrcDiagnostics(const QJsonObject &stats)
 {
@@ -362,6 +382,8 @@ void PlayerChrome::pushSettings()
     settings.insert("subtitleIndex", subtitleIndex_);
     settings.insert("interpolationIndex", interpolationIndex_);
     settings.insert("fastQuality", fastQuality_);
+    settings.insert("subtitleAppearance", subtitleAppearance_);
+    settings.insert("picture", picture_);
     settings.insert("interpolationShortcut", interpolationShortcut_);
     const QString json = QString::fromUtf8(QJsonDocument(settings).toJson(QJsonDocument::Compact));
     view_->page()->runJavaScript(QString("window.lambdaUi&&window.lambdaUi.setSettings(%1);").arg(json));

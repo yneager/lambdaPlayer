@@ -7,6 +7,7 @@
   const q = (s, root=document) => root.querySelector(s);
   const qa = (s, root=document) => Array.from(root.querySelectorAll(s));
   const button = label => q('button[aria-label="' + label + '"]');
+  const shortcutTitle = (title, action) => { const key = window.LambdaShortcuts?.hint(action); return title + (key ? ' (' + key + ')' : ''); };
   const clamp = v => Math.max(0, Math.min(1, v));
   const call = (name, ...args) => { if (bridge && typeof bridge[name] === 'function') bridge[name](...args); };
 
@@ -60,7 +61,7 @@
     const railPath = q('button[aria-label="Player mode"] svg path');
     if (railPath) railPath.setAttribute('d', paused ? 'M8 5v14l11-7z' : 'M8 5h3v14H8zm5 0h3v14h-3z');
     const play = button('Play');
-    if (play) play.title = paused ? 'Play (Space)' : 'Pause (Space)';
+    if (play) play.title = shortcutTitle(paused ? 'Play' : 'Pause', 'play');
   }
 
   function updateTimeline() {
@@ -116,16 +117,6 @@
     }
     if (eyebrow) eyebrow.textContent = state.eyebrow || (loaded ? 'NOW PLAYING' : 'READY');
 
-    const center = q('.center-state');
-    const centerKicker = q('.center-copy span');
-    const centerText = q('.center-copy strong');
-    const showCenter = !loaded || !!state.paused || finished;
-    if (center) center.classList.toggle('lambda-hidden', !showCenter);
-    if (centerKicker) centerKicker.textContent = loading ? 'LOADING' : finished ? 'FINISHED' : loaded ? 'PAUSED' : 'READY';
-    if (centerText) centerText.textContent = loading ? (state.title || 'Opening video…')
-      : finished ? 'Press play to watch again'
-      : loaded ? 'Press play to continue' : 'Open or drop a local video';
-
     setPlayIcon(!loaded || !!state.paused || finished);
 
     updateTimeline();
@@ -135,7 +126,7 @@
     const volumeButton = button('Volume');
     if (volumeButton) {
       volumeButton.classList.toggle('active', !!state.muted);
-      volumeButton.title = state.muted ? 'Unmute (M)' : 'Mute (M)';
+      volumeButton.title = shortcutTitle(state.muted ? 'Unmute' : 'Mute', 'mute');
       const path = q('svg path', volumeButton);
       if (path) path.setAttribute('d', state.muted
         ? 'M5 9v6h4l5 4V5L9 9H5zm12 1 4 4m0-4-4 4'
@@ -190,7 +181,7 @@
       nextButton.title = state.hasNext ? 'Next video in folder' : 'No next video in this folder';
     }
     const fullscreenButton = button('Fullscreen');
-    if (fullscreenButton) fullscreenButton.title = document.documentElement.classList.contains('is-fullscreen') ? 'Exit fullscreen (F / Esc)' : 'Fullscreen (F)';
+    if (fullscreenButton) fullscreenButton.title = shortcutTitle(document.documentElement.classList.contains('is-fullscreen') ? 'Exit fullscreen' : 'Fullscreen', 'fullscreen');
     // Measure after DOM writes, once per frame; avoid synchronous layout in
     // the middle of every playback-state update.
     scheduleVideoRect();
@@ -230,7 +221,7 @@
   function renderSettings(focus='all', trigger=null) {
     const panel = ensureSettings();
     panel.dataset.focus = focus;
-    const titles = {audio: 'Audio', subtitles: 'Subtitles', interpolation: 'Smoothness', speed: 'Speed', picture: 'Fullscreen picture'};
+    const titles = {audio: 'Audio', subtitles: 'Subtitles', interpolation: 'Smoothness', speed: 'Speed', picture: 'Picture'};
     const title = q('.lambda-settings-title', panel);
     if (title) title.textContent = titles[focus] || 'Playback settings';
     panel.setAttribute('aria-label', titles[focus] || 'Playback settings');
@@ -282,6 +273,37 @@
     load.disabled = !state.loaded;
     load.addEventListener('click', () => call('action', 'load-subtitle'));
     sub.appendChild(load);
+    const appearance = Object.assign({size:100, position:100, background:0, delay:0, override:false}, settings.subtitleAppearance);
+    const adjustment = (key, title, min, max, step, format) => {
+      const label = document.createElement('label'); label.className = 'lambda-fast-quality';
+      const heading = document.createElement('span'); heading.append(document.createTextNode(title));
+      const value = document.createElement('strong'); heading.append(value);
+      const input = document.createElement('input'); input.type = 'range'; input.min = min; input.max = max; input.step = step;
+      input.value = appearance[key]; input.setAttribute('aria-label', title); input.disabled = !state.loaded;
+      value.textContent = format(Number(input.value));
+      input.addEventListener('input', () => { appearance[key] = Number(input.value); value.textContent = format(appearance[key]); });
+      input.addEventListener('change', () => call('adjustSubtitles', appearance));
+      label.append(heading, input); sub.append(label);
+    };
+    adjustment('size', 'Text size', 50, 200, 5, v => v + '%');
+    adjustment('position', 'Vertical position', 0, 100, 1, v => v === 100 ? 'Bottom' : v === 0 ? 'Top' : v + '%');
+    adjustment('background', 'Black background', 0, 100, 5, v => v ? v + '%' : 'Off');
+    adjustment('delay', 'Subtitle timing', -60, 60, 0.1, v => (v > 0 ? '+' : '') + v.toFixed(1) + ' s');
+    const timing = document.createElement('div'); timing.className = 'lambda-options';
+    for (const [title, amount] of [['Earlier 0.1 s', -0.1], ['Later 0.1 s', 0.1]]) {
+      const button = document.createElement('button'); button.className = 'lambda-option'; button.textContent = title; button.disabled = !state.loaded;
+      button.onclick = () => { appearance.delay = Math.max(-60, Math.min(60, Number((appearance.delay + amount).toFixed(1)))); call('adjustSubtitles', appearance); };
+      timing.append(button);
+    }
+    sub.append(timing);
+    const override = document.createElement('label'); override.className = 'lambda-subtitle-override';
+    const check = document.createElement('input'); check.type = 'checkbox'; check.checked = appearance.override; check.disabled = !state.loaded;
+    check.onchange = () => { appearance.override = check.checked; call('adjustSubtitles', appearance); };
+    override.append(check, document.createTextNode('Apply appearance to styled ASS subtitles')); sub.append(override);
+    const note = document.createElement('p'); note.className = 'lambda-subtitle-note';
+    note.textContent = 'Positive timing shows subtitles later. Timing resets for each video. Text appearance does not change image-based subtitles.'; sub.append(note);
+    const reset = document.createElement('button'); reset.className = 'lambda-option lambda-action'; reset.textContent = 'Reset subtitle adjustments'; reset.disabled = !state.loaded;
+    reset.onclick = () => call('adjustSubtitles', {size:100, position:100, background:0, delay:0, override:false}); sub.append(reset);
     body.appendChild(sub);
     const smoothness = makeGroup('Smoothness', 'interpolation', settings.interpolation, settings.interpolationIndex, i => call('selectInterpolation', i));
     if (settings.interpolationIndex === 11) {
@@ -300,15 +322,31 @@
     const shortcut = document.createElement('button');
     shortcut.className = 'lambda-option lambda-action';
     shortcut.textContent = 'Toggle interpolation shortcut: ' + (settings.interpolationShortcut || 'Set shortcut…');
-    shortcut.addEventListener('click', () => call('action', 'interpolation-shortcut'));
+    shortcut.addEventListener('click', () => window.LambdaShortcuts?.open('interpolation'));
     smoothness.appendChild(shortcut);
     body.appendChild(smoothness);
     const speeds = SPEEDS.map(v => ({label: String(v) + '×', enabled: true}));
     const selectedSpeed = Math.max(0, SPEEDS.findIndex(v => Math.abs(v - Number(state.speed || 1)) < 0.001));
     body.appendChild(makeGroup('Speed', 'speed', speeds, selectedSpeed, i => call('speed', SPEEDS[i])));
-    body.appendChild(makeGroup('Fullscreen picture', 'picture', [
+    const pictureGroup = makeGroup('Picture', 'picture', [
       {label: 'Fit — show whole picture'}, {label: 'Fill — crop edges'}
-    ], state.fullscreenFill === false ? 0 : 1, i => call('action', i ? 'fill-video' : 'fit-video')));
+    ], state.fullscreenFill === false ? 0 : 1, i => call('action', i ? 'fill-video' : 'fit-video'));
+    const picture = Object.assign({brightness:0,contrast:0,saturation:0,gamma:0}, settings.picture);
+    for (const [key, title] of Object.entries({brightness:'Brightness',contrast:'Contrast',saturation:'Saturation',gamma:'Gamma'})) {
+      const label = document.createElement('label'); label.className = 'lambda-fast-quality';
+      const heading = document.createElement('span'); heading.textContent = title;
+      const value = document.createElement('strong'); heading.append(value);
+      const input = document.createElement('input'); input.type = 'range'; input.min = -100; input.max = 100; input.step = 1;
+      input.value = picture[key]; input.setAttribute('aria-label', title); input.disabled = !state.loaded;
+      const update = () => { picture[key] = Number(input.value); value.textContent = (picture[key] > 0 ? '+' : '') + picture[key]; };
+      update(); input.oninput = update; input.onchange = () => call('adjustPicture', picture);
+      label.append(heading,input); pictureGroup.append(label);
+    }
+    const resetPicture = document.createElement('button'); resetPicture.className = 'lambda-option lambda-action'; resetPicture.textContent = 'Reset picture'; resetPicture.disabled = !state.loaded;
+    resetPicture.onclick = () => call('adjustPicture', {brightness:0,contrast:0,saturation:0,gamma:0}); pictureGroup.append(resetPicture); body.append(pictureGroup);
+    const shortcutsGroup = document.createElement('section'); shortcutsGroup.className = 'lambda-setting-group';
+    const editShortcuts = document.createElement('button'); editShortcuts.className = 'lambda-option lambda-action'; editShortcuts.textContent = 'Edit keyboard shortcuts…';
+    editShortcuts.onclick = () => window.LambdaShortcuts?.open(); shortcutsGroup.append(editShortcuts); body.append(shortcutsGroup);
     const wasOpen = panel.classList.contains('open');
     panel.classList.add('open');
     qa('.settings-trigger').forEach(b => b.classList.toggle('active', b === trigger || (wasOpen && b.classList.contains('active') && !trigger)));
@@ -367,9 +405,9 @@
       brand.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); call('action','home'); } });
     }
     const open = button('Open file');
-    if (open) { open.title = 'Open video (Ctrl+O)'; open.addEventListener('click', () => call('action','open')); }
+    if (open) { open.title = shortcutTitle('Open video', 'open'); open.addEventListener('click', () => call('action','open')); }
     const more = button('More options');
-    if (more) { more.title = 'Fullscreen picture (Fit / Fill)'; more.classList.add('settings-trigger'); more.addEventListener('click', () => toggleSettings('picture', more)); }
+    if (more) { more.title = 'Picture controls'; more.classList.add('settings-trigger'); more.addEventListener('click', () => toggleSettings('picture', more)); }
 
     const playerMode = button('Player mode');
     if (playerMode) playerMode.addEventListener('click', () => call('action','play'));
@@ -397,10 +435,8 @@
       b.addEventListener('click', () => toggleSettings('subtitles', b));
     });
     const cinema = button('Cinema mode');
-    if (cinema) { cinema.title = 'Fullscreen (F)'; cinema.addEventListener('click', () => call('action','fullscreen')); }
+    if (cinema) { cinema.title = shortcutTitle('Fullscreen', 'fullscreen'); cinema.addEventListener('click', () => call('action','fullscreen')); }
 
-    const center = q('.play-core');
-    if (center) center.addEventListener('click', () => call('action','play'));
     const play = button('Play');
     if (play) play.addEventListener('click', () => call('action','play'));
     const next = button('Next');
@@ -478,6 +514,7 @@
       if (panel && !e.target.closest('.lambda-settings,.settings-trigger')) closeSettings();
     });
     document.addEventListener('keydown', e => {
+      if (e.target.closest?.('dialog')) return;
       if (e.key === 'Escape' && q('.lambda-settings.open')) { e.stopPropagation(); closeSettings(); }
     }, true);
 
@@ -508,6 +545,7 @@
     bridge = channel.objects.lambdaBridge;
     if (window.LambdaWindow && channel.objects.windowBridge) window.LambdaWindow.attach(channel.objects.windowBridge);
     bind();
+    channel.objects.windowBridge?.shortcutsChanged.connect(() => { setState(state); const open = button('Open'); if (open) open.title = shortcutTitle('Open video','open'); });
     call('ready');
     setState(state);
     setSettings(settings);

@@ -23,9 +23,6 @@
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QKeyEvent>
-#include <QKeySequenceEdit>
-#include <QDialog>
-#include <QDialogButtonBox>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMimeData>
@@ -367,27 +364,6 @@ void MainWindow::buildUi()
     railLayout->addWidget(railCaptionsButton);
     railLayout->addWidget(railCinemaButton);
 
-    // Center play state from the Vui concept. It appears before a file is
-    // loaded and while playback is paused.
-    centerState_ = new QWidget(root_);
-    centerState_->setAttribute(Qt::WA_TranslucentBackground);
-    auto *centerLayout = new QVBoxLayout(centerState_);
-    centerLayout->setContentsMargins(8, 8, 8, 8);
-    centerLayout->setAlignment(Qt::AlignCenter);
-    centerLayout->setSpacing(8);
-
-    centerPlayButton_ = makeButton(centerState_, "▶", "playCore", "Play / pause");
-    centerKicker_ = new QLabel("READY", centerState_);
-    centerKicker_->setObjectName("centerKicker");
-    centerKicker_->setAlignment(Qt::AlignCenter);
-    centerText_ = new QLabel("Open or drop a video", centerState_);
-    centerText_->setObjectName("mutedLabel");
-    centerText_->setAlignment(Qt::AlignCenter);
-
-    centerLayout->addWidget(centerPlayButton_, 0, Qt::AlignHCenter);
-    centerLayout->addWidget(centerKicker_);
-    centerLayout->addWidget(centerText_);
-
     // Truthful quality/status badge: resolution + current interpolation path.
     // We intentionally do not claim HDR unless we actually add verified HDR
     // metadata detection later.
@@ -569,7 +545,7 @@ void MainWindow::buildUi()
     // The real Vui player is rendered by Chromium as CSS/HTML chrome, composited
     // by Qt above the OpenGL video widget. The native widgets above are only
     // kept as hidden state holders for tracks/speed/interpolation.
-    for (QWidget *legacyOverlay : {topBar_, sideRail_, qualityBadge_, centerState_, controls_}) {
+    for (QWidget *legacyOverlay : {topBar_, sideRail_, qualityBadge_, controls_}) {
         legacyOverlay->hide();
     }
 
@@ -631,10 +607,41 @@ void MainWindow::buildUi()
     connect(playerChrome_, &PlayerChrome::interpolationRequested, this, [this](int index) {
         if (index >= 0 && index < interpolationMode_->count()) interpolationMode_->setCurrentIndex(index);
     });
-    interpolationShortcut_ = QKeySequence::fromString(appSettings().value("player/interpolationShortcut").toString(), QKeySequence::PortableText);
+    reloadShortcuts();
     lastInterpolationIndex_ = appSettings().value("player/lastInterpolationIndex", 3).toInt();
     playerChrome_->setInterpolationShortcut(interpolationShortcut_.toString(QKeySequence::NativeText));
     connect(playerChrome_, &PlayerChrome::configureInterpolationShortcutRequested, this, &MainWindow::configureInterpolationShortcut);
+    subtitleAppearance_ = {{"size", qBound(50, appSettings().value("subtitles/size", 100).toInt(), 200)},
+                           {"position", qBound(0, appSettings().value("subtitles/position", 100).toInt(), 100)},
+                           {"background", qBound(0, appSettings().value("subtitles/background", 0).toInt(), 100)},
+                           {"delay", 0.0}, {"override", appSettings().value("subtitles/override", false).toBool()}};
+    playerChrome_->setSubtitleAppearance(subtitleAppearance_);
+    for (const auto *key : {"brightness", "contrast", "saturation", "gamma"})
+        picture_.insert(key, qBound(-100, appSettings().value(QString("picture/") + key, 0).toInt(), 100));
+    playerChrome_->setPictureSettings(picture_);
+    connect(playerChrome_, &PlayerChrome::pictureRequested, this, [this](const QJsonObject &values) {
+        for (const auto *key : {"brightness", "contrast", "saturation", "gamma"}) {
+            const double value = values.value(key).toDouble();
+            const int bounded = std::isfinite(value) ? qRound(qBound(-100.0, value, 100.0)) : 0;
+            picture_.insert(key, bounded);
+            appSettings().setValue(QString("picture/") + key, bounded);
+        }
+        applyPictureSettings(); playerChrome_->setPictureSettings(picture_);
+    });
+    connect(playerChrome_, &PlayerChrome::subtitleAppearanceRequested, this, [this](const QJsonObject &values) {
+        const auto bounded = [&values](const char *key, double fallback, double low, double high) {
+            const double value = values.value(key).toDouble(fallback);
+            return std::isfinite(value) ? qBound(low, value, high) : fallback;
+        };
+        subtitleAppearance_ = {{"size", bounded("size", 100, 50, 200)},
+                               {"position", bounded("position", 100, 0, 100)},
+                               {"background", bounded("background", 0, 0, 100)},
+                               {"delay", bounded("delay", 0, -60, 60)}, {"override", values.value("override").toBool()}};
+        for (const auto *key : {"size", "position", "background", "override"})
+            appSettings().setValue(QString("subtitles/") + key, subtitleAppearance_.value(key).toVariant());
+        applySubtitleAppearance();
+        playerChrome_->setSubtitleAppearance(subtitleAppearance_);
+    });
     connect(playerChrome_, &PlayerChrome::fastQualityRequested, this, [this](int quality) {
         fastQuality_ = qBound(0, quality, 2);
         QSettings(QSettings::IniFormat, QSettings::UserScope, "LAMBDA", "LAMBDA Player")
@@ -687,7 +694,6 @@ void MainWindow::buildUi()
 
     connect(playButton_, &QPushButton::clicked, this, &MainWindow::togglePause);
     connect(railPlayerButton_, &QPushButton::clicked, this, &MainWindow::togglePause);
-    connect(centerPlayButton_, &QPushButton::clicked, this, &MainWindow::togglePause);
     connect(nextButton, &QPushButton::clicked, this, &MainWindow::playNextInFolder);
 
     connect(railAudioButton, &QPushButton::clicked, this, [this] {
@@ -901,6 +907,8 @@ void MainWindow::initMpv()
         playerChrome_->raise();
     }
 
+    applySubtitleAppearance();
+    applyPictureSettings();
     setMpvPropertyDouble("volume", 80);
     layoutOverlayWidgets();
     raiseOverlayWidgets();
@@ -989,6 +997,10 @@ void MainWindow::handleEvent(mpv_event *event)
         interpolationLastDrops_ = -1;
         interpolationSlowSamples_ = 0;
     } else if (event->event_id == MPV_EVENT_FILE_LOADED) {
+        applyPictureSettings();
+        subtitleAppearance_.insert("delay", 0.0);
+        applySubtitleAppearance();
+        playerChrome_->setSubtitleAppearance(subtitleAppearance_);
         if (frc_) frc_->resetTimeline();
         interpolationWarmup_.restart();
         interpolationLastDrops_ = -1;
@@ -1075,36 +1087,7 @@ void MainWindow::handleEvent(mpv_event *event)
 
 void MainWindow::configureInterpolationShortcut()
 {
-    QDialog dialog(this);
-    dialog.setWindowTitle("Interpolation shortcut");
-    auto *layout = new QVBoxLayout(&dialog);
-    auto *label = new QLabel("Press your shortcut with Ctrl or Alt. Clear it to disable the shortcut.", &dialog);
-    label->setWordWrap(true);
-    layout->addWidget(label);
-    auto *edit = new QKeySequenceEdit(interpolationShortcut_, &dialog);
-    edit->setMaximumSequenceLength(1);
-    edit->setClearButtonEnabled(true);
-    layout->addWidget(edit);
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
-    layout->addWidget(buttons);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        const auto sequence = edit->keySequence();
-        if (!sequence.isEmpty()) {
-            const auto combination = sequence[0];
-            if (!(combination.keyboardModifiers() & (Qt::ControlModifier | Qt::AltModifier))
-                || (combination.key() == Qt::Key_O && combination.keyboardModifiers().testFlag(Qt::ControlModifier))) {
-                label->setText("Choose a shortcut with Ctrl or Alt. Ctrl+O is reserved for Open video.");
-                return;
-            }
-        }
-        interpolationShortcut_ = sequence;
-        appSettings().setValue("player/interpolationShortcut", sequence.toString(QKeySequence::PortableText));
-        playerChrome_->setInterpolationShortcut(sequence.toString(QKeySequence::NativeText));
-        dialog.accept();
-    });
-    edit->setFocus();
-    dialog.exec();
+    playerChrome_->openShortcutEditor("interpolation");
 }
 
 void MainWindow::toggleInterpolation()
@@ -1311,6 +1294,24 @@ void MainWindow::interpolationDeactivated(const QString &reason)
 void MainWindow::showInterpolationError(const QString &message)
 {
     showToast(QString("Frame interpolation is off. Playback continues normally.\n%1").arg(message), true);
+}
+
+void MainWindow::applyPictureSettings()
+{
+    for (const auto *key : {"brightness", "contrast", "saturation", "gamma"})
+        setMpvPropertyDouble(key, picture_.value(key).toDouble());
+}
+
+void MainWindow::applySubtitleAppearance()
+{
+    if (!mpv_) return;
+    setMpvPropertyDouble("sub-scale", subtitleAppearance_.value("size").toDouble(100) / 100.0);
+    setMpvPropertyDouble("sub-pos", subtitleAppearance_.value("position").toDouble(100));
+    setMpvPropertyDouble("sub-delay", subtitleAppearance_.value("delay").toDouble());
+    const double background = subtitleAppearance_.value("background").toDouble() / 100.0;
+    command({"set", "sub-back-color", QString("0/0/0/%1").arg(background, 0, 'f', 2)});
+    command({"set", "sub-border-style", background > 0 ? "background-box" : "outline-and-shadow"});
+    command({"set", "sub-ass-override", subtitleAppearance_.value("override").toBool() ? "force" : "yes"});
 }
 
 void MainWindow::updateSubtitleMargin()
@@ -1587,6 +1588,53 @@ bool MainWindow::keyEventOwnerIsThisWindow(QObject *watched) const
     return window && window == windowHandle();
 }
 
+void MainWindow::reloadShortcuts()
+{
+    if (!homePage_ || !playerChrome_) return;
+    shortcutBindings_.clear();
+    const auto bindings = homePage_->windowBridge()->shortcuts();
+    for (auto it = bindings.begin(); it != bindings.end(); ++it)
+        shortcutBindings_.insert(it.key(), QKeySequence::fromString(it.value().toString(), QKeySequence::PortableText));
+    interpolationShortcut_ = shortcutBindings_.value("interpolation");
+    playerChrome_->setInterpolationShortcut(interpolationShortcut_.toString(QKeySequence::NativeText));
+}
+
+bool MainWindow::handleShortcut(QKeyEvent *event)
+{
+    const auto *bridge = activeWindowBridge();
+    if (bridge && bridge->keyboardInputActive()) return false;
+    if (event->key() == Qt::Key_Escape && isPlayerVisible()) {
+        if (playerChrome_) playerChrome_->closeSettings();
+        if (fullscreenMode_) toggleFullscreen();
+        else if (miniMode_) toggleMiniPlayer();
+        return true;
+    }
+    const QKeySequence pressed(event->keyCombination());
+    QString action;
+    for (auto it = shortcutBindings_.begin(); it != shortcutBindings_.end(); ++it)
+        if (!it.value().isEmpty() && it.value() == pressed) { action = it.key(); break; }
+    if (action.isEmpty() || (action != "open" && !isPlayerVisible())) return false;
+    const bool repeat = action.startsWith("seek") || action.startsWith("volume") || action.startsWith("subtitle");
+    if (event->isAutoRepeat() && !repeat) return true;
+    if (action == "open") QTimer::singleShot(0, this, &MainWindow::openFile);
+    else if (action == "play") togglePause();
+    else if (action == "fullscreen") toggleFullscreen();
+    else if (action == "mute") toggleMute();
+    else if (action == "seekBack" || action == "seekForward") command({"seek", action == "seekBack" ? "-5" : "5", "relative"});
+    else if (action == "volumeUp" || action == "volumeDown") volume_->setValue(qBound(0, volume_->value() + (action == "volumeUp" ? 5 : -5), 100));
+    else if (action == "next") playNextInFolder();
+    else if (action == "home") showHome();
+    else if (action == "interpolation") toggleInterpolation();
+    else if (action == "loadSubtitle") QTimer::singleShot(0, this, &MainWindow::loadSubtitle);
+    else if (action == "subtitleEarlier" || action == "subtitleLater") {
+        const double delay = qBound(-60.0, subtitleAppearance_.value("delay").toDouble() + (action == "subtitleEarlier" ? -0.1 : 0.1), 60.0);
+        subtitleAppearance_.insert("delay", delay); setMpvPropertyDouble("sub-delay", delay);
+        playerChrome_->setSubtitleAppearance(subtitleAppearance_);
+        showToast(QString("Subtitle timing: %1 s").arg(delay, 0, 'f', 1));
+    }
+    return true;
+}
+
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == seek_ && event->type() == QEvent::MouseButtonPress) {
@@ -1606,56 +1654,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     }
 
     if (event->type() == QEvent::KeyPress && isActiveWindow()
-        && keyEventOwnerIsThisWindow(watched)) {
-        auto *keyEvent = static_cast<QKeyEvent *>(event);
-        if (keyEvent->key() == Qt::Key_O && keyEvent->modifiers().testFlag(Qt::ControlModifier)) {
-            if (!keyEvent->isAutoRepeat()) {
-                QTimer::singleShot(0, this, &MainWindow::openFile);
-            }
-            return true;
-        }
-    }
-
-    if (event->type() == QEvent::KeyPress && isActiveWindow() && isPlayerVisible()
-        && keyEventOwnerIsThisWindow(watched)) {
-        auto *keyEvent = static_cast<QKeyEvent *>(event);
-
-        if (!interpolationShortcut_.isEmpty()
-            && QKeySequence(keyEvent->keyCombination()) == interpolationShortcut_) {
-            if (!keyEvent->isAutoRepeat()) toggleInterpolation();
-            return true;
-        }
-        switch (keyEvent->key()) {
-        case Qt::Key_Space:
-            if (!keyEvent->isAutoRepeat()) togglePause();
-            return true;
-        case Qt::Key_F:
-            if (!keyEvent->isAutoRepeat()) toggleFullscreen();
-            return true;
-        case Qt::Key_Escape:
-            if (playerChrome_) playerChrome_->closeSettings();
-            if (fullscreenMode_) {
-                toggleFullscreen();
-                return true;
-            }
-            if (miniMode_) {
-                toggleMiniPlayer();
-                return true;
-            }
-            break;
-        case Qt::Key_M:
-            toggleMute();
-            return true;
-        case Qt::Key_Right:
-            command({"seek", "5", "relative"});
-            return true;
-        case Qt::Key_Left:
-            command({"seek", "-5", "relative"});
-            return true;
-        default:
-            break;
-        }
-    }
+        && keyEventOwnerIsThisWindow(watched) && handleShortcut(static_cast<QKeyEvent *>(event))) return true;
 
     if (isPlayerVisible() && fullscreenMode_ && event->type() == QEvent::MouseMove) {
         auto *widget = qobject_cast<QWidget *>(watched);
@@ -1713,7 +1712,6 @@ void MainWindow::updatePlaybackUi()
     const QString playGlyph = paused_ ? QStringLiteral("▶") : QStringLiteral("Ⅱ");
     playButton_->setText(playGlyph);
     railPlayerButton_->setText(playGlyph);
-    centerPlayButton_->setText("▶");
 
     muteButton_->setText(muted_ ? "MUTE" : "VOL");
     muteButton_->setProperty("active", muted_);
@@ -1726,9 +1724,6 @@ void MainWindow::updatePlaybackUi()
 
 void MainWindow::updateCenterState()
 {
-    // Native controls are retained only as backend state containers.
-    // The visible center state is the real Vui CSS element.
-    if (centerState_) centerState_->hide();
     if (playerChrome_) {
         playerChrome_->setMediaLoaded(mediaLoaded_);
         playerChrome_->setPlaybackState(paused_, muted_);
@@ -1819,7 +1814,7 @@ void MainWindow::layoutOverlayWidgets()
     }
 
     // Keep all legacy native chrome hidden. The visible controls are CSS.
-    for (QWidget *legacyOverlay : {topBar_, sideRail_, qualityBadge_, centerState_, controls_}) {
+    for (QWidget *legacyOverlay : {topBar_, sideRail_, qualityBadge_, controls_}) {
         if (legacyOverlay) legacyOverlay->hide();
     }
 
@@ -1840,7 +1835,7 @@ void MainWindow::setFullscreenChromeVisible(bool visible)
     if (!fullscreenMode_) visible = true;
     fullscreenControlsVisible_ = visible;
     if (playerChrome_) playerChrome_->setChromeVisible(visible);
-    for (QWidget *legacyOverlay : {topBar_, sideRail_, qualityBadge_, centerState_, controls_}) {
+    for (QWidget *legacyOverlay : {topBar_, sideRail_, qualityBadge_, controls_}) {
         if (legacyOverlay) legacyOverlay->hide();
     }
 }
@@ -2197,9 +2192,6 @@ void MainWindow::openPath(const QString &path)
         playerChrome_->setMediaTitle(fileName, "LOADING");
         playerChrome_->setTimeline(0.0, 0.0);
     }
-    centerKicker_->setText("LOADING");
-    centerText_->setText(fileName);
-    centerState_->hide();
 
     // The OpenGL renderer is created when the player page is first shown;
     // mpv's libmpv VO needs it before video starts, so defer the first load.
@@ -2261,9 +2253,6 @@ void MainWindow::openStream(const AddonPlayback &playback)
         playerChrome_->setMediaTitle(title, playback.source.viaStreamingServer ? "CONNECTING" : "LOADING");
         playerChrome_->setTimeline(0.0, 0.0);
     }
-    centerKicker_->setText("LOADING");
-    centerText_->setText(title);
-    centerState_->hide();
 
     // showHome() pauses mpv and the pause flag survives loadfile: a newly
     // opened video starts playing (as Stremio's ShellVideo does).
@@ -2635,6 +2624,7 @@ void MainWindow::connectWindowBridge(WindowBridge *bridge)
     if (!bridge) {
         return;
     }
+    connect(bridge, &WindowBridge::shortcutsChanged, this, &MainWindow::reloadShortcuts);
     connect(bridge, &WindowBridge::updateCheckRequested, this, [this] { updates_->check(true); });
     connect(bridge, &WindowBridge::updateDownloadRequested, updates_, &UpdateChecker::download);
     connect(bridge, &WindowBridge::updateCancelRequested, updates_, &UpdateChecker::cancelDownload);
@@ -2992,30 +2982,6 @@ void MainWindow::dropEvent(QDropEvent *event)
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
-    switch (event->key()) {
-    case Qt::Key_Space:
-        togglePause();
-        break;
-    case Qt::Key_F:
-        toggleFullscreen();
-        break;
-    case Qt::Key_Escape:
-        if (fullscreenMode_) {
-            toggleFullscreen();
-        } else {
-            QMainWindow::keyPressEvent(event);
-        }
-        break;
-    case Qt::Key_M:
-        toggleMute();
-        break;
-    case Qt::Key_Right:
-        command({"seek", "5", "relative"});
-        break;
-    case Qt::Key_Left:
-        command({"seek", "-5", "relative"});
-        break;
-    default:
-        QMainWindow::keyPressEvent(event);
-    }
+    if (handleShortcut(event)) event->accept();
+    else QMainWindow::keyPressEvent(event);
 }

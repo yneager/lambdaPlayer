@@ -121,7 +121,7 @@
     pop.innerHTML =
       '<div class="pop-head"><span class="brand-mark" aria-hidden="true">λ</span><div><strong>LAMBDA Player</strong><small class="pop-version"></small></div></div>' +
       '<p>Local video player built on libmpv, with optional real-time RIFE frame interpolation on any Vulkan GPU.</p>' +
-      '<div class="pop-keys"><span><kbd>Space</kbd> Play / pause</span><span><kbd>←</kbd><kbd>→</kbd> Seek 5 s</span><span><kbd>F</kbd> Fullscreen</span><span><kbd>M</kbd> Mute</span><span><kbd>Ctrl</kbd><kbd>O</kbd> Open</span></div>' +
+      '<div class="pop-keys"><span><kbd data-shortcut-hint="play"></kbd> Play / pause</span><span><kbd data-shortcut-hint="seekBack"></kbd><kbd data-shortcut-hint="seekForward"></kbd> Seek 5 s</span><span><kbd data-shortcut-hint="fullscreen"></kbd> Fullscreen</span><span><kbd data-shortcut-hint="mute"></kbd> Mute</span><span><kbd data-shortcut-hint="open"></kbd> Open</span></div>' +
       '<p class="pop-update-status" data-update-status></p><label class="pop-test-updates"><input type="checkbox" data-test-updates /> Include test releases</label>' +
       '<div class="pop-actions"><button type="button" class="pop-btn" data-pop="updates">Check for updates</button><button type="button" class="pop-btn primary" data-pop="update-download" hidden>Download update</button><button type="button" class="pop-btn primary" data-pop="open">Open video</button><button type="button" class="pop-btn" data-pop="licenses">Third-party licenses</button></div>';
     document.body.appendChild(pop);

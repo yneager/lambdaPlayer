@@ -129,6 +129,7 @@
   function show(view, options = {}) {
     if (!q('main.view[data-view="' + view + '"]')) return;
     const leaving = state.view;
+    const previousScroll = window.scrollY;
     if (!options.back && leaving !== view) {
       if (view === 'details' || view === 'search') {
         state.history.push({view: leaving, scroll: window.scrollY});
@@ -145,7 +146,8 @@
     qa('main.view').forEach(m => { m.hidden = m.dataset.view !== view; });
     setActiveLink(view);
     document.body.dataset.view = view;
-    window.scrollTo({top: options.scroll || 0, behavior: 'instant'});
+    const targetScroll = options.scroll || 0;
+    if (previousScroll !== targetScroll) window.scrollTo({top: targetScroll, behavior: 'instant'});
 
     if (view === 'discover' && !discover.initialized) openDiscover(null);
     if (view === 'addons') { renderAddons(); loadAddonCatalogs(false); }
@@ -1221,7 +1223,11 @@
     area.remove();
   }
 
+  let renderedAddons = null;
   function renderAddons() {
+    const signature = JSON.stringify(state.addons);
+    if (signature === renderedAddons) { renderServer(); refreshDefaultButtons(); return; }
+    renderedAddons = signature;
     const list = q('.addon-list');
     list.innerHTML = '';
     if (!state.addons.length) {

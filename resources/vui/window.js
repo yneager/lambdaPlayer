@@ -160,7 +160,6 @@
     attach(windowBridge) {
       bridge = windowBridge;
       window.LambdaPreferences?.attach(bridge);
-      window.LambdaPreferences?.attach(bridge);
       if (window.LambdaFrameClock) window.LambdaFrameClock.attach(bridge);
       buildControls();
       applyState();

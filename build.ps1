@@ -13,6 +13,10 @@ $out   = "$local\app"
 $qt    = "C:\Qt\6.8.3\msvc2022_64"
 $bt    = "C:\Program Files\Microsoft Visual Studio\18\BuildTools"
 
+foreach ($requiredTool in @("$bt\VC\Auxiliary\Build\vcvars64.bat", "$qt\bin\windeployqt.exe")) {
+    if (-not (Test-Path -LiteralPath $requiredTool)) { throw "Required build tool is missing: $requiredTool" }
+}
+
 # Double-clicking the CMD launcher does not inherit Codex's Node runtime PATH.
 # Verify a cached engine directly so normal/offline builds do not require Node.
 $enginePath = Join-Path $repo 'tools\extra\win32\x64\aria2c.exe'
@@ -45,7 +49,9 @@ if (-not $engineReady) {
 # MSVC environment (vcvars64) imported into this PowerShell session.
 $ErrorActionPreference = "Continue"
 $envDump = cmd /c "`"$bt\VC\Auxiliary\Build\vcvars64.bat`" >nul 2>nul && set"
+$compilerExitCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
+if ($compilerExitCode -ne 0) { throw "Visual Studio compiler setup failed ($compilerExitCode)." }
 foreach ($line in $envDump) { if ($line -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($Matches[1])" -Value $Matches[2] } }
 $env:Path = "$bt\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$bt\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$qt\bin;" + $env:Path
 
@@ -54,7 +60,8 @@ if ($Reconfigure -or -not (Test-Path "$build\build.ninja")) {
         -DMPV_INCLUDE_DIR="$deps\mpv\include" -DMPV_LIBRARY="$deps\mpv-import\mpv.lib"
     if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 }
-cmake --build $build --parallel
+if ($Test) { cmake --build $build --parallel }
+else { cmake --build $build --target LambdaPlayer --parallel }
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 if ($Test) {
@@ -101,8 +108,11 @@ Copy-Item "$repo\licenses" $out -Recurse -Force
 Copy-Item "$repo\THIRD_PARTY_NOTICES.md" $out -Force
 Copy-Item "$deps\mpv\libmpv-2.dll" "$out\libmpv-2.dll" -Force
 $ErrorActionPreference = "Continue"
-& "$qt\bin\windeployqt.exe" --release --no-translations --compiler-runtime "$out\LambdaPlayer.exe" 2>&1 | Out-Null
+$deployLog = Join-Path $local 'qt-deploy.log'
+& "$qt\bin\windeployqt.exe" --release --no-translations --compiler-runtime "$out\LambdaPlayer.exe" *> $deployLog
+$deployExitCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
+if ($deployExitCode -ne 0) { throw "Qt runtime deployment failed ($deployExitCode). See $deployLog" }
 if (-not (Test-Path "$out\rife")) {
     Copy-Item "$deps\rife" "$out\rife" -Recurse -Force
     Copy-Item "$deps\vapoursynth" "$out\vapoursynth" -Recurse -Force
@@ -114,4 +124,35 @@ if (Test-Path "$deps\stream-server\lambda-stream-server.exe") {
 }
 Write-Host "Built: $out\LambdaPlayer.exe"
 
-if (-not $NoRun) { Start-Process "$out\LambdaPlayer.exe" -WorkingDirectory $out -WindowStyle Normal }
+foreach ($runtimeFile in @('libmpv-2.dll', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll',
+    'Qt6Concurrent.dll', 'Qt6WebEngineCore.dll', 'QtWebEngineProcess.exe',
+    'platforms\qwindows.dll', 'resources\qtwebengine_resources.pak')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $out $runtimeFile))) {
+        throw "The deployed player is missing $runtimeFile. See $deployLog"
+    }
+}
+
+if (-not $NoRun) {
+    # Shell launch detaches the GUI from the build console. Redirecting a GUI's
+    # streams here can keep a calling CMD pipeline alive until the app closes.
+    $logDir = Join-Path $local 'logs'
+    New-Item -ItemType Directory -Force $logDir | Out-Null
+    $startupLog = Join-Path $logDir ("player-" + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.log')
+    "Starting $deployedExe" | Set-Content -LiteralPath $startupLog
+    $player = Start-Process -FilePath $deployedExe -WorkingDirectory $out -WindowStyle Normal -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 200
+        $player.Refresh()
+        if ($player.HasExited) {
+            "Exited during startup: $($player.ExitCode)" | Add-Content -LiteralPath $startupLog
+            throw "LAMBDA Player exited during startup ($($player.ExitCode)). See $startupLog"
+        }
+    } while ($player.MainWindowHandle -eq 0 -and [DateTime]::UtcNow -lt $deadline)
+    if ($player.MainWindowHandle -eq 0) {
+        "No window appeared within 20 seconds. Process: $($player.Id)" | Add-Content -LiteralPath $startupLog
+        throw "LAMBDA Player did not open a window. See $startupLog"
+    }
+    "Opened window. Process: $($player.Id)" | Add-Content -LiteralPath $startupLog
+    Write-Host "Opened LAMBDA Player. Startup log: $startupLog"
+}

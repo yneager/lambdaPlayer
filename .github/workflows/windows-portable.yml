@@ -151,14 +151,8 @@ jobs:
           $env:QT_QPA_PLATFORM = 'offscreen'
           ctest --test-dir build -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw "Native tests failed" }
-          node --test tests/vui/downloads.test.cjs
-          if ($LASTEXITCODE -ne 0) { throw "Download engine integration test failed" }
-          node --test tests/vui/frame-clock.test.cjs
-          if ($LASTEXITCODE -ne 0) { throw "UI frame clock tests failed" }
-          node --test tests/vui/release-highlights.test.cjs
-          if ($LASTEXITCODE -ne 0) { throw "Release highlights tests failed" }
-          node --test tests/vui/torrent.test.cjs
-          if ($LASTEXITCODE -ne 0) { throw "Torrent peer integration test failed" }
+          node --test tests/vui/*.test.cjs
+          if ($LASTEXITCODE -ne 0) { throw "UI and download engine tests failed" }
       - name: Package
         shell: pwsh
         run: |

@@ -135,26 +135,99 @@
     await show();
     if (!client?.isConnected()) { confirming = false; return; }
     const dialog = element('dialog', 'download-confirm');
-    dialog.setAttribute('aria-label', 'Choose download destination');
-    dialog.innerHTML = '<h2>Start download</h2><p data-source></p><strong>Save to</strong><span class="download-folder" data-destination></span><div class="install-actions"><button type="button" class="pill-btn" data-choose>Change folder…</button><button type="button" class="pill-btn" data-cancel>Cancel</button><button type="button" class="pill-btn primary" data-start>Start download</button></div><p data-error role="alert"></p>';
+    dialog.setAttribute('aria-label', 'Choose download files and destination');
+    dialog.innerHTML = '<h2>Start download</h2><p data-source></p><strong>Save to</strong><span class="download-folder" data-destination></span><section data-files hidden><div class="download-file-toolbar"><strong>Choose files</strong><button type="button" class="pill-btn" data-all>Select all</button><button type="button" class="pill-btn" data-none>Clear</button></div><div class="download-file-list"></div><p data-selection aria-live="polite"></p></section><div class="install-actions"><button type="button" class="pill-btn" data-choose>Change folder…</button><button type="button" class="pill-btn" data-cancel>Cancel</button><button type="button" class="pill-btn primary" data-start>Start download</button></div><p data-error role="alert"></p>';
+    const start = dialog.querySelector('[data-start]');
+    const errorLabel = dialog.querySelector('[data-error]');
+    const torrent = !!source.data || source.uri?.startsWith('magnet:');
+    let rootGid, gid, files = [], selected = new Set(), closed = false, started = false, busy = false;
+    const downloadClient = client;
+    const previewDirectory = directory.replace(/\\/g, '/').replace(/\/$/, '');
+    const cleanup = async () => {
+      // Include the paused payload created by a magnet's metadata request.
+      const ids = new Set([gid, rootGid].filter(Boolean));
+      if (rootGid) {
+        try { (await downloadClient.tellStatus(rootGid)).followedBy?.forEach(id => ids.add(id)); } catch {}
+      }
+      for (const id of ids) {
+        try { await downloadClient.forceRemove(id); } catch {}
+        try { await downloadClient.removeDownloadResult(id); } catch {}
+      }
+    };
+    const updateSelection = () => {
+      const bytes = files.filter(file => selected.has(file.index)).reduce((sum, file) => sum + Number(file.length), 0);
+      dialog.querySelector('[data-selection]').textContent = `${selected.size} of ${files.length} files · ${formatBytes(bytes)} selected`;
+      start.disabled = busy || (torrent && !selected.size);
+    };
     dialog.querySelector('[data-source]').textContent = source.name || source.uri;
     dialog.querySelector('[data-destination]').textContent = directory;
     dialog.querySelector('[data-choose]').onclick = async () => {
       dialog.querySelector('[data-destination]').textContent = await chooseFolder();
     };
-    dialog.querySelector('[data-cancel]').onclick = () => dialog.close();
-    dialog.querySelector('[data-start]').onclick = async event => {
-      event.target.disabled = true;
-      try {
-        if (source.data) await client.addTorrent(source.data, [], {dir: directory});
-        else await client.addUri([source.uri], {dir: directory});
-        message('Download added.'); dialog.close(); await poll();
-      } catch (error) { dialog.querySelector('[data-error]').textContent = error.message; }
-      finally { event.target.disabled = false; }
+    dialog.querySelector('[data-all]').onclick = () => {
+      files.forEach(file => selected.add(file.index));
+      dialog.querySelectorAll('.download-file-list input').forEach(input => { input.checked = true; }); updateSelection();
     };
-    dialog.onclose = () => { confirming = false; dialog.remove(); };
+    dialog.querySelector('[data-none]').onclick = () => {
+      selected.clear(); dialog.querySelectorAll('.download-file-list input').forEach(input => { input.checked = false; }); updateSelection();
+    };
+    start.onclick = async () => {
+      busy = true; start.disabled = true;
+      try {
+        if (torrent) {
+          if (!gid || !selected.size) throw new Error('Choose at least one file.');
+          await downloadClient.changeOption(gid, {dir: directory, 'select-file': [...selected].join(','), 'pause-metadata': 'false'});
+          await downloadClient.unpause(gid);
+        } else await downloadClient.addUri([source.uri], {dir: directory});
+        started = true; message('Download added.'); dialog.close(); await poll();
+      } catch (error) { errorLabel.textContent = error.message; }
+      finally { busy = false; updateSelection(); }
+    };
+    dialog.oncancel = event => { if (busy) event.preventDefault(); };
+    dialog.querySelector('[data-cancel]').onclick = () => { if (!busy) dialog.close(); };
+    dialog.onclose = () => {
+      closed = true; dialog.remove();
+      if (!started) cleanup().finally(() => { confirming = false; poll(); });
+      else confirming = false;
+    };
     document.body.append(dialog); dialog.showModal();
+    if (!torrent) return;
+    start.disabled = true;
+    errorLabel.textContent = source.data ? 'Reading torrent files…' : 'Finding peers to fetch the file list… You can cancel at any time.';
+    try {
+      rootGid = source.data
+        ? await downloadClient.addTorrent(source.data, [], {dir: directory, pause: 'true'})
+        : await downloadClient.addUri([source.uri], {dir: directory, 'pause-metadata': 'true'});
+      if (closed) { await cleanup(); return; }
+      gid = rootGid;
+      const deadline = Date.now() + 120000;
+      while (!closed) {
+        const task = await downloadClient.tellStatus(gid);
+        if (task.followedBy?.length) { gid = task.followedBy[0]; continue; }
+        if (task.status === 'error') throw new Error(task.errorMessage || 'Unable to fetch torrent metadata.');
+        if (task.bittorrent?.info && task.files?.length) { files = task.files; break; }
+        if (Date.now() > deadline) throw new Error('No file list received yet. Cancel and try again when more peers are available.');
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      if (closed) { await cleanup(); return; }
+      const list = dialog.querySelector('.download-file-list');
+      files.forEach(file => {
+        selected.add(file.index);
+        const label = element('label', 'download-file');
+        const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = true;
+        checkbox.onchange = () => { if (checkbox.checked) selected.add(file.index); else selected.delete(file.index); updateSelection(); };
+        // Paths come from the engine; use textContent to keep torrent names inert.
+        const path = file.path.replace(/\\/g, '/');
+        const relativePath = path.startsWith(previewDirectory + '/') ? path.slice(previewDirectory.length + 1) : path;
+        label.append(checkbox, element('span', '', relativePath), element('small', '', formatBytes(file.length)));
+        label.title = file.path; list.append(label);
+      });
+      dialog.querySelector('[data-files]').hidden = false;
+      errorLabel.textContent = 'Only selected files will download. Shared torrent pieces may contain a small amount of adjacent file data.';
+      updateSelection();
+    } catch (error) { if (!closed) errorLabel.textContent = error.message; }
   }
+
   function render() {
     const list = q('[data-download-list]');
     const existing = new Map(Array.from(list.querySelectorAll('.download-card')).map(card => [card.dataset.gid, card]));

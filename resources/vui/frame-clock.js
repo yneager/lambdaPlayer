@@ -9,6 +9,28 @@
   const callbacks = new Map();
   const animations = new Map();
   let scanNeeded = false;
+  const visibleTargets = new Map();
+  const viewportObserver = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
+    const now = performance.now();
+    for (const entry of entries) {
+      visibleTargets.set(entry.target, entry.isIntersecting);
+      for (const [animation, state] of animations) {
+        if (animation.effect.target !== entry.target) continue;
+        state.visible = entry.isIntersecting;
+        state.last = now;
+      }
+    }
+    schedule();
+  }, {rootMargin: '80px'}) : null;
+  function visible(target) {
+    if (!viewportObserver) return true;
+    if (!visibleTargets.has(target)) {
+      const rect = target.getBoundingClientRect();
+      visibleTargets.set(target, rect.width > 0 && rect.height > 0 && rect.bottom > -80 && rect.top < innerHeight + 80 && rect.right > -80 && rect.left < innerWidth + 80);
+      viewportObserver.observe(target);
+    }
+    return visibleTargets.get(target);
+  }
 
   function scanAnimations(now) {
     if (!scanNeeded) return;
@@ -41,18 +63,22 @@
         // CSS state changes can resume an animation paused through the API.
         if (animation.playState === 'running') animation.pause();
       } else if (animation.playState === 'running') {
-        animations.set(animation, {time: Number(animation.currentTime) || 0, last: now, rate: animation.playbackRate, running: true});
+        animations.set(animation, {time: Number(animation.currentTime) || 0, last: now, rate: animation.playbackRate, running: true, visible: visible(animation.effect.target), end: animation.effect.getComputedTiming().endTime});
         animation.pause();
       }
+    }
+    const targets = new Set(Array.from(animations.keys(), animation => animation.effect.target));
+    for (const target of visibleTargets.keys()) {
+      if (!targets.has(target)) { viewportObserver.unobserve(target); visibleTargets.delete(target); }
     }
   }
   function advanceAnimations(now) {
     for (const [animation, state] of animations) {
       if (animation.playState === 'idle' || animation.playState === 'finished') { animations.delete(animation); continue; }
-      if (!state.running) continue;
+      if (!state.running || !state.visible) continue;
       state.time += (now - state.last) * state.rate;
       state.last = now;
-      const end = animation.effect.getComputedTiming().endTime;
+      const end = state.end;
       if (state.rate > 0 && Number.isFinite(end) && state.time >= end) {
         animation.finish();
         animations.delete(animation);
@@ -61,7 +87,7 @@
   }
 
   function schedule() {
-    const motion = Array.from(animations.values()).some(state => state.running);
+    const motion = Array.from(animations.values()).some(state => state.running && state.visible);
     if (scheduled || (!callbacks.size && !motion && !scanNeeded) || document.hidden) return;
     scheduled = true;
     if (bridge) bridge.requestUiFrame();
@@ -95,7 +121,7 @@
   window.cancelAnimationFrame = id => { callbacks.delete(id); };
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && nativeHandle) { nativeCancel(nativeHandle); nativeHandle = 0; scheduled = false; }
-    if (!document.hidden) { scheduled = false; schedule(); }
+    if (!document.hidden) { for (const state of animations.values()) state.last = performance.now(); scheduled = false; schedule(); }
   });
   window.LambdaFrameClock = {
     attach(next) {
